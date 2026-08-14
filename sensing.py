@@ -188,33 +188,67 @@ def test_single(path:str, focus:float=0.125, sample_percent:float = 0.1):
     axis_size = image.shape[0]
 
     print(f'max,min=({np.max(image), np.min(image)})\ndimensions {image.shape}\n{num_points} points ({sample_percent*num_points} samples)')
-
+        
     SAMPLE_COUNT = int(sample_percent * num_points)
     idx = 0
     reconstructed = [[], [], []]
     
     samples = take_samples(num_points, SAMPLE_COUNT)
 
-    plt.figure(figsize=(8, 8))
+    mask_img = np.zeros(num_points)
+    mask_img[samples] = 1
+    mask_img = np.resize(mask_img, (axis_size, axis_size))
+    mask_img = swizzle_image(condense_frames([mask_img, mask_img, mask_img]))
+    mask_img = mask_img * image
+    
+    
+    plt.figure(figsize=(10, 6))
+    plt.subplot(1, 2, 1)
+    plt.imshow(image)
+    plt.subplot(1, 2, 2)
+    plt.imshow(mask_img)
+    plt.show()
+
+    plt.figure(figsize=(10, 10))
 
     nrows, ncols = 4, 4
+    
+
 
     democolors = 'Grays'
     for data in datas:
         length = len(data)
         # print(samples)
+        
         recon = reconstruct(data[samples], length, samples, mode='cvx')
         print(f'{idx+1}/3')
 
         reconstructed[idx] = np.resize(recon, (axis_size, axis_size))
+        
         plt.subplot(nrows, ncols, (idx*ncols)+1) 
         plt.imshow(reconstructed[idx], cmap=democolors)
+        ax = plt.gca()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+        
         plt.subplot(nrows, ncols, (idx*ncols)+2)
         plt.imshow(frames[idx], cmap=democolors)
+        ax = plt.gca()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+        
         plt.subplot(nrows, ncols, (idx*ncols)+3)
         plt.imshow(np.abs(reconstructed[idx] - frames[idx]), cmap=democolors)
+        ax = plt.gca()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+        
         plt.subplot(nrows, ncols, (idx*ncols)+4)
-        plt.plot(data-recon)
+        plt.hist(data-recon, bins=25)
+        # ax = plt.gca()
+        # ax.get_xaxis().set_visible(False)
+        # ax.get_yaxis().set_visible(False)
+        
         idx += 1
 
     recon_image = swizzle_image(condense_frames(reconstructed))
@@ -222,18 +256,46 @@ def test_single(path:str, focus:float=0.125, sample_percent:float = 0.1):
 
     plt.subplot(nrows, ncols, (nrows-1)*ncols + 1)
     plt.imshow(recon_image, interpolation='bicubic')
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+        
     plt.subplot(nrows, ncols, (nrows-1)*ncols + 2)
     plt.imshow(image, interpolation='bicubic')
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
     plt.subplot(nrows, ncols, (nrows-1)*ncols + 3)
     plt.imshow(raw_image)
-
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
+    plt.subplot(nrows, ncols, (nrows-1)*ncols + 4)
+    plt.imshow(mask_img)
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    
+    
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f'{path}.comparison.png')
+    
+    plt.figure(figsize=(10, 10), facecolor='black')
+    plt.imshow(recon_image)
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    plt.tight_layout()
+    plt.savefig(f'{path}.out.png')
+    
+    print(f'Saved outputs')
 
 
 
 def main():
-    test_single(f'./testdata/space.jpg', focus=0.04, sample_percent = 0.6)
+    test_single(f'./testdata/pikachu.jpg', focus=0.1, sample_percent = 0.45)
 
 if __name__ == '__main__':
     main()
