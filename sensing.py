@@ -2,9 +2,38 @@ import os, sys
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.fftpack import dct, idct
+from scipy.fftpack import dct, idct, fft, fft2, ifft, ifft2
+from scipy.linalg import dft
+from scipy.signal import unit_impulse
 from scipy.ndimage import zoom
 import cvxpy as cp
+from enum import Enum
+from numba import jit
+
+'''
+Misc. data structures
+'''
+class Basis(Enum):
+    RANDOM = 0
+    DISCRETE_COSINE = 1
+    FOURIER = 2
+
+_BASIS_FUNCTIONS = {
+    Basis.RANDOM : (
+        lambda p, n, y : (np.eye(n, n) - np.random.random((n, n)))[p,:],
+        lambda p, n, theta, s : s,
+    ),
+
+    Basis.DISCRETE_COSINE : (
+        lambda p, n, y : dct(np.eye(n, n))[p, :],
+        lambda p, n, theta, s : idct(s),
+    ),
+
+    Basis.FOURIER : (
+        lambda p, n, y : dft(n)[p,:],
+        lambda p, n, theta, s : np.flip(ifft(s)),
+    )
+}
 
 '''
 Below are functions pertinent to deconstructing & reconstructing images (a CoSaMP implementation included)
@@ -56,23 +85,48 @@ def take_samples(length, samples):
     selections = [int(e[0]) for e in selections]
     return selections
 
-def reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cosamp'):
+# @jit(nopython=False)
+def reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cvx', basis:Basis|any = Basis.DISCRETE_COSINE, verbose:bool = False):
     '''
-    for a sampling y, with n maximum spaces in the dataset and sample vector p, computes and returns the reconstructed signal x'''
-    psi = dct(np.eye(n, n))
-    theta = psi[p, :]
+    for a list of samples y along with positions in the signal p (1:1), and length of output n, computes and returns the reconstructed signal x.
+
+    the transformation basis can be set with the 'basis' argument, which should be a Basis enum set to a valid value. 
+
+    a custom basis may be provided as a tuple of two functions - the first being a function of one parameter, n, that returns the transformation matrix theta, and the second being a function of two parameters, p & s (n being the length of s), that applies the inverse of the first function to produce x. 
+
+    the default basis is Discrete Cosine transformation
+
+    the algorithm mode can also be specified with the 'mode' argument. by default, the mode is l1 norm minimalisation via the CVXPY package. 
+    '''
+    if basis is None:
+        basis = Basis.DISCRETE_COSINE
+
+    # TODO 
+    generate = None
+    inverse = None
+    if type(basis) is Basis:
+        generate, inverse = _BASIS_FUNCTIONS[basis]
+    else:
+        # TODO ensure check here to make sure no errors!
+        generate, inverse = basis
+
+    theta = generate(p, n, y)
+
+    if theta is None:
+        print(f'No theta could be found! theta is None')
+        return None
+
     if mode=='cosamp':
         s = cosamp(theta, y, sparsity, epsilon, max_iter)
     elif mode=='cvx':
-        s_l1 = cp.Variable(n)
+        s_l1 = cp.Variable(n, complex=True)
         obj = cp.Minimize(cp.norm(s_l1, 1))
         cons = [theta @ s_l1 == np.conjugate(y)]
         problem = cp.Problem(obj, cons)
-        problem.solve(verbose=True)
+        problem.solve(verbose=verbose)
         s = s_l1.value
 
-
-    return idct(s)
+    return inverse(p, n, theta, s)
 
 '''
 Below are functions related to image processing (swizzling in particular)
@@ -188,199 +242,8 @@ def no_axis():
 Main sequence code
 '''
 
-def test_single(path:str, size:int=75, sample_percent:float = 0.1):
-    image = plt.imread(path)
-    # image = (image - np.min(image)) / (np.max(image) - np.min(image))
-    print(f'image is {image.shape} along first 2 axis')
-
-    # crop image down to central square
-    image = square_crop(image)
-    raw_image = image
-    focus = size / image.shape[0] 
-
-    # unswizzle it so we can resize each frame
-    image_rgb = unswizzle_image(image)
-    frames = [np.clip(zoom(frame, focus), 0, 255).astype('int') for frame in image_rgb]
-    frames = [(frame / 255).astype('float') for frame in frames]
-
-    # comparison image in full color - frames keeps each individual image
-    image = condense_frames(frames)
-    image = swizzle_image(image)
-
-    num_points = image.shape[0] * image.shape[1]
-    datas = [np.ravel(frame) for frame in frames]
-    axis_size = image.shape[0]
-
-    print(f'max,min=({np.max(image), np.min(image)})\ndimensions {image.shape}\n{num_points} points ({sample_percent*num_points} samples)')
-        
-    SAMPLE_COUNT = int(sample_percent * num_points)
-    idx = 0
-    reconstructed = [[], [], []]
-    
-    samples = take_samples(num_points, SAMPLE_COUNT)
-
-    mask_img = np.zeros(num_points)
-    mask_img[samples] = 1
-    mask_img = np.resize(mask_img, (axis_size, axis_size))
-    mask_img = swizzle_image(condense_frames([mask_img, mask_img, mask_img]))
-    mask_img = mask_img * image
-    
-    
-    plt.figure(figsize=(10, 6))
-    plt.subplot(1, 2, 1)
-    plt.imshow(image)
-    plt.subplot(1, 2, 2)
-    plt.imshow(mask_img)
-    plt.show()
-
-    plt.figure(figsize=(10, 10))
-
-    nrows, ncols = 4, 4
-    
-    democolors = 'Grays'
-    for data in datas:
-        length = len(data)
-        # print(samples)
-        
-        recon = reconstruct(data[samples], length, samples, mode='cvx')
-        print(f'{idx+1}/3')
-
-        reconstructed[idx] = np.resize(recon, (axis_size, axis_size))
-        
-        plt.subplot(nrows, ncols, (idx*ncols)+1) 
-        plt.imshow(reconstructed[idx], cmap=democolors)
-        ax = plt.gca()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        
-        plt.subplot(nrows, ncols, (idx*ncols)+2)
-        plt.imshow(frames[idx], cmap=democolors)
-        ax = plt.gca()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        
-        plt.subplot(nrows, ncols, (idx*ncols)+3)
-        plt.imshow(np.abs(reconstructed[idx] - frames[idx]), cmap=democolors)
-        ax = plt.gca()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        
-        plt.subplot(nrows, ncols, (idx*ncols)+4)
-        plt.hist(data-recon, bins=25)
-        # ax = plt.gca()
-        # ax.get_xaxis().set_visible(False)
-        # ax.get_yaxis().set_visible(False)
-        
-        idx += 1
-
-    recon_image = swizzle_image(condense_frames(reconstructed))
-    recon_image = (recon_image - np.min(recon_image)) / (np.max(recon_image) - np.min(recon_image))
-
-    plt.subplot(nrows, ncols, (nrows-1)*ncols + 1)
-    plt.imshow(recon_image, interpolation='bicubic')
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-        
-    plt.subplot(nrows, ncols, (nrows-1)*ncols + 2)
-    plt.imshow(image, interpolation='bicubic')
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    
-    plt.subplot(nrows, ncols, (nrows-1)*ncols + 3)
-    plt.imshow(raw_image)
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    
-    plt.subplot(nrows, ncols, (nrows-1)*ncols + 4)
-    plt.imshow(mask_img)
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    
-    
-    plt.tight_layout()
-    plt.savefig(f'{path}.cmp.png')
-    
-    plt.figure(figsize=(10, 10), facecolor='black')
-    plt.imshow(recon_image)
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    plt.tight_layout()
-    plt.savefig(f'{path}.out.png')
-    
-    plt.imsave(f'{path}.raw.png', recon_image)
-    
-    print(f'Saved outputs')
-
-def test_grayscale(path:str, size:int=75, sample_percent:float=0.25):
-    image = plt.imread(path)
-    image = square_crop(image)
-    # image = unswizzle_image(image)
-    image = make_gray(image)
-
-    axis_size = image.shape[0]
-    scale_factor = size / axis_size
-    image = np.clip(zoom(image, scale_factor), 0, 255).astype('float') / 256
-    axis_size = image.shape[0]
-    
-    # make raw data and pick samples
-    raw_data = np.ravel(image)
-    num_points = len(raw_data)
-    sample_count = int(sample_percent * num_points)
-    samples = take_samples(num_points, sample_count)
-    
-    # generate visual mask
-    mask_image = np.zeros(num_points)
-    mask_image[samples] = 1
-    mask_image = np.resize(mask_image, (axis_size, axis_size)) * image
-    
-    print(f'max,min=({np.max(image), np.min(image)})\ndimensions {image.shape}\n{num_points} points ({sample_percent*num_points} samples)')
-    
-    plt.figure(figsize=(10, 6))
-    plt.subplot(1,2,1)
-    plt.imshow(image, cmap='gray')
-    plt.subplot(1,2,2)
-    plt.imshow(mask_image, cmap='gray')
-    plt.show()
-    
-    reconstruction = reconstruct(raw_data[samples], num_points, samples, mode='cvx')
-    
-    recon_image = np.resize(reconstruction, (axis_size, axis_size))
-    
-    residual = np.abs(recon_image - image)
-    
-    plt.figure(figsize=(12, 8))
-    plt.subplot(1, 3, 1)
-    plt.imshow(recon_image, cmap='gray')
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    plt.subplot(1, 3, 2)
-    plt.imshow(image, cmap='gray')
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    plt.subplot(1, 3, 3)
-    plt.imshow(residual, cmap='gray')
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    plt.show()
-    plt.savefig(f'{path}.grayscale.cmp.jpg')
-    
-    plt.figure(figsize=(10, 10), facecolor='black')
-    plt.imshow(recon_image)
-    ax = plt.gca()
-    ax.get_xaxis().set_visible(False)
-    ax.get_yaxis().set_visible(False)
-    plt.tight_layout()
-    plt.savefig(f'{path}.grayscale.out.png')
-    
-def test_anychannels(path:str, size:int=50, sample_percent:float=0.25, bincount=25, cmap='viridis', force_data=None, normalise_recon:bool = False):
+# @jit(nopython=True)
+def test_anychannels(path:str, size:int=50, sample_percent:float=0.25, bincount=25, cmap='viridis', force_data=None, normalise_recon:bool = False, test_vis:bool = False, basis:Basis = Basis.DISCRETE_COSINE, take_real:bool=True, verbose:bool = False):
     if force_data is not None:
         image = force_data
     else:
@@ -416,15 +279,6 @@ def test_anychannels(path:str, size:int=50, sample_percent:float=0.25, bincount=
     sample_mask = np.reshape(sample_mask, (axis_size, axis_size, channels))
     sample_mask = sample_mask * cropped_image
     
-    plt.figure(figsize=(8, 4), facecolor=(0, 0, 0, 0))
-    plt.subplot(1,2,1)
-    plt.imshow(cropped_image)
-    plt.title('Cropped & scaled image')
-    plt.subplot(1,2,2)
-    plt.imshow(sample_mask, cmap=cmap)
-    plt.title(f'Sample selection from cropped image')
-    plt.show()
-    
     plt.figure(figsize=(12, 12))
     nrows = channels + 1
     ncols = 4 # image, reconstruction, residual, histogram residual
@@ -435,9 +289,20 @@ def test_anychannels(path:str, size:int=50, sample_percent:float=0.25, bincount=
         channel = cropped_image[:,:,channel_idx]
         channel_ravel = np.ravel(channel)
         
-        recon = reconstruct(channel_ravel[samples], full_size, samples, mode='cvx')
+        recon = reconstruct(channel_ravel[samples], full_size, samples, mode='cvx', basis=basis, verbose=verbose)
+        # check that its not complex, if complex, take depending on take_real
+        COMPLEXES = [np.complex64, np.complex128]
+        if take_real:
+            recon = np.real(recon)
+        else:
+            recon = np.imag(recon)
+            
+        print(f'Got recon of len {len(recon)} (min, max = {np.min(recon)}, {np.max(recon)})')
+        # recon = [(e.real if take_real else e.imag) if (type(e) in COMPLEXES) else e for e in recon]
+        
         if normalise_recon:
-            recon = recon - np.min(recon) / (np.max(recon) - np.min(recon))
+            recon = (recon - np.min(recon)) / (np.max(recon) - np.min(recon))
+            print(f'(normalised to min, max = {np.min(recon)}, {np.max(recon)})')
         
         recon_channel = np.reshape(recon, (axis_size, axis_size))
         residual = np.abs(recon - channel_ravel)
@@ -505,21 +370,10 @@ def test_anychannels(path:str, size:int=50, sample_percent:float=0.25, bincount=
     plt.imshow(reconstructed_image)
     no_axis()
     plt.tight_layout()
-    plt.savefig(f'{path}.out_op.png', transparent=False)
-        
+    plt.savefig(f'{path}.out_op.png', transparent=False)       
 
-def main():
-    test_anychannels(f'./testdata/space.jpg', size=50, sample_percent=0.50, normalise_recon=True)
-    # junk = np.zeros((100, 100, 3))
-    # for x in range(0, 100):
-    #     for y in range(0, 100):
-    #         z = 142 - np.sqrt(x**2 + y**2)
-    #         R = x/100.0
-    #         G = y/100.0
-    #         B = z/142.0
-    #         junk[x,y] = np.array([R, G, B])
-    # test_anychannels(f'./testdata/hue', size=50, sample_percent=0.2, force_data=junk, normalise_recon=True)
-    pass
+def main(args):
+    test_anychannels(f'./testdata/ocean.jpg', size=25, sample_percent=0.5, normalise_recon=True, test_vis=False, basis=Basis.FOURIER, verbose=True)
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
