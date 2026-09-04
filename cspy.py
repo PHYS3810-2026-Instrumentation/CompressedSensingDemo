@@ -15,24 +15,6 @@ class Basis(Enum):
     DISCRETE_COSINE = 1
     FOURIER = 2
 
-_BASIS_FUNCTIONS = {
-    Basis.RANDOM : (
-        lambda p, n, y : (np.eye(n, n) - np.random.random((n, n)))[p,:],
-        lambda p, n, theta, s : s,
-    ),
-
-    Basis.DISCRETE_COSINE : (
-        lambda p, n, y : dct(np.eye(n, n))[p, :],
-        lambda p, n, theta, s : idct(s),
-    ),
-
-    Basis.FOURIER : (
-        lambda p, n, y : dft(n)[p,:],
-        lambda p, n, theta, s : np.flip(ifft(s)),
-    )
-}
-
-
 def cosamp(phi, u, s, epsilon=1e-10, max_iter=1000):
     """
     Return an `s`-sparse approximation of the target signal
@@ -115,7 +97,7 @@ def ltret(code, pipeline=False, payload = None):
         return (code, payload)
 
 # @jit(nopython=False)
-def reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cvx', basis:Basis|any = Basis.DISCRETE_COSINE, verbose:bool = False):
+def _reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cvx', basis:Basis|any = Basis.DISCRETE_COSINE, verbose:bool = False):
     '''
     for a list of samples y along with positions in the signal p (1:1), and length of output n, computes and returns the reconstructed signal x.
 
@@ -156,6 +138,29 @@ def reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cvx', b
 
     return inverse(p, n, theta, s)
 
+
+def reconstruct(args, pipe:bool=False, inp:any = None):
+    if type(args) == str:
+        args = args.split()
+
+    if len(args) == 0:
+        print('''
+cspy reconstruct
+
+
+usage:
+    py cspy.py reconstruct (path/to/vectors) 
+    Reconstructs data based on the contents of the vectors. All vectors should be in the standard 1D sampled vector format. At least one vector file should be a sample position vector P.
+
+arguments:
+    -o, --out (path)
+        specifies the save path for all of the output files. Xn.csv will be appended to each output.
+
+    -b, --basis (basis)
+
+''')
+        return ltret(0, pipe)
+    
 # PIPE FORMAT: header, P, [Yn]
 # INPUT PIPE: header, data
 def sample(args, pipe:bool=False, inp:any = None):
@@ -268,6 +273,9 @@ def vector(args, pipe:bool = False, inp:any = None):
 
         -n, --normalise
             normalises the image to a range (0, 1) if it is integer-typed (in a range 0-255).
+
+        -s, --separate
+            separates contents of a multi-channel image into individual channeled images. output filename should have a * to denote where the number should go if featured.
     ''')
         return ltret(0, pipe)
     IN_PATH = None
@@ -276,6 +284,7 @@ def vector(args, pipe:bool = False, inp:any = None):
     DO_CROP = False
     PATTERN = 'xy'
     NORMALISE = False
+    SEPARATE = False
 
     idx = 0
     while idx < len(args):
@@ -288,6 +297,8 @@ def vector(args, pipe:bool = False, inp:any = None):
             PATTERN = args[idx]
         elif arg in ('-n', '--normalise'):
             NORMALISE = True
+        elif arg in ('-s', '--separate'):
+            SEPARATE = True
         elif arg in ('-r', '--resize'):
             idx += 1
             tmp = args[idx].split('=')
@@ -324,9 +335,17 @@ def vector(args, pipe:bool = False, inp:any = None):
     MONO_IMAGE = len(image.shape) == 2
     if MONO_IMAGE:
         image = np.reshape(image, (image.shape[0], image.shape[1], 1))
-
+    RAW_OUT_PATH = OUT_PATH
     if OUT_PATH == None:
-        OUT_PATH = f'{IN_PATH}.X.csv'
+        if SEPARATE:
+            OUT_PATH = IN_PATH + '.X{0}.csv'
+        else:
+            OUT_PATH = f'{IN_PATH}.X.csv'
+    elif SEPARATE:
+        if '*' not in OUT_PATH:
+            print(f'Out path does not have * character to denote index for separate channel files!')
+            return ltret(-1, pipe)
+        OUT_PATH = OUT_PATH.replace('*', '{0}')
 
     if DO_CROP:
         image = square_crop(image)
@@ -378,9 +397,19 @@ def vector(args, pipe:bool = False, inp:any = None):
         case 'theta':
             pass
 
-    np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
-    if pipe:
-        return ltret(0, payload=(OUT_PATH, [f'# {header}', out]))
+    if not SEPARATE:
+        np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
+        if pipe:
+            return ltret(0, payload=(OUT_PATH, [f'# {header}', out]))
+    else:
+        n = 0
+        columns = out.shape[1]
+        while n < columns:
+            data = out[:,n]
+            np.savetxt(OUT_PATH.format(n), data, fmt='%f', delimiter=',', header=header)
+            n += 1
+        if pipe:
+            return ltret(0, payload=(RAW_OUT_PATH, [f'# {header}', out]))
     
     return ltret(0, pipe)
 
@@ -399,7 +428,8 @@ def devector(args, pipe:bool = False, inp:any = None):
 
     usage:
         py cspy.py devector (path/to/some/csv) 
-        Devectorizes the signal stored in a csv file. The csv file should have the format stored as the header (i.e. xy {x} {y})
+        Devectorizes the signal stored in a csv file. The csv file should have the format stored as the header (i.e. xy {x} {y}).
+        If the csv file path is in the form X*, searches for all numbered files X0, X1, ... and stitches all files together for an RGB/RGBA image.
     
     arguments:
         -o, --out (path)
@@ -423,18 +453,45 @@ def devector(args, pipe:bool = False, inp:any = None):
 
     data = None
     header = None
+    MULTI_DATA = False
     if IN_PATH == None:
         if inp != None:
             IN_PATH = inp[0]
             header = inp[1][0]
             data = inp[1][1]
+            if type(data) == list:
+                MULTI_DATA = True
         else:
             print(f'No file specified?')
             return ltret(-1, pipe)
     else:
-        with open(IN_PATH, mode='r') as fp:
-            header = fp.readline().strip('# ')
-        data = np.loadtxt(IN_PATH, delimiter=',')
+        if '*' in IN_PATH:
+            formatstr = IN_PATH.replace('*', '{0}')
+            N = 0
+            MULTI_DATA = True
+            data = []
+            while True:
+                actualstr = formatstr.format(N)
+                if not os.path.exists(actualstr):
+                    break
+                if N == 0:
+                    with open(actualstr, mode='r') as fp:
+                        header = fp.readline().strip('# ')
+                temp = np.loadtxt(actualstr, delimiter=',')
+                data.append(temp)
+                N += 1
+            if len(data) == 0:
+                print(f'No files found by format {IN_PATH}')
+                return ltret(-1, pipe)
+            if len(data) > 4:
+                print(f'Invalid number of channels {len(data)}')
+                return ltret(-1, pipe)
+            
+            IN_PATH = IN_PATH.replace('*', 'n')
+        else:
+            with open(IN_PATH, mode='r') as fp:
+                header = fp.readline().strip('# ')
+            data = np.loadtxt(IN_PATH, delimiter=',')
 
     if OUT_PATH == None:
         OUT_PATH = f'{IN_PATH}.png'
@@ -446,14 +503,32 @@ def devector(args, pipe:bool = False, inp:any = None):
         case 'xy':
             x = int(header[1])
             y = int(header[2])
-            c = data.shape[1]
-            image = np.reshape(data, (x, y, c))
+            if not MULTI_DATA:
+                c = data.shape[1]
+                image = np.reshape(data, (x, y, c))
+            else:
+                image = np.zeros((x, y, len(data)))
+                n = 0
+                for vector in data:
+                    channel = np.reshape(vector, (x, y))
+                    image[:,:,n] = channel
+                    n += 1
         case 'yx':
             x = int(header[1])
             y = int(header[2])
-            c = data.shape[1]
-            image = np.reshape(data, (y, x, c))
-            image = np.transpose(image, axes=(1, 0, 2))
+            if not MULTI_DATA:
+                c = data.shape[1]
+                image = np.reshape(data, (y, x, c))
+                image = np.transpose(image, axes=(1, 0, 2))
+            else:
+                image = np.zeros(x, y, len(data))
+                n = 0
+                for vector in data:
+                    channel = np.reshape(vector, (y, x, 1))
+                    channel = np.transpose(channel, axes=(1, 0, 2))
+                    image[:,:,n] = channel
+                    n += 1
+
 
     plt.imsave(OUT_PATH, image)
     if pipe:
@@ -532,8 +607,7 @@ def monochrome(args, pipe:bool = False, inp:any = None):
         return ltret(0, payload=(OUT_PATH, outimg))
     return ltret(0, pipe)
 
-
-def main(args):
+def cspy_engine(args):
     if type(args) == str:
         args = args.split()
 
@@ -620,4 +694,4 @@ help:
             print(f'Unrecognized mode {mode}')
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    cspy_engine(sys.argv[1:])
