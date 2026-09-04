@@ -3,7 +3,7 @@ import os, sys
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fftpack import dct, idct, fft, fft2, ifft, ifft2
-from scipy.linalg import dft
+from scipy.linalg import dft, hadamard
 from scipy.signal import unit_impulse
 from scipy.ndimage import zoom
 import cvxpy as cp
@@ -96,70 +96,239 @@ def ltret(code, pipeline=False, payload = None):
     else:
         return (code, payload)
 
-# @jit(nopython=False)
-def _reconstruct(y, n, p, sparsity=5, epsilon=1e-10, max_iter=1000, mode='cvx', basis:Basis|any = Basis.DISCRETE_COSINE, verbose:bool = False):
-    '''
-    for a list of samples y along with positions in the signal p (1:1), and length of output n, computes and returns the reconstructed signal x.
+def csv_header(path):
+    header, data = None, None
+    with open(path, mode='r') as fp:
+        header = fp.readline()
+    data = np.loadtxt(path, delimiter=',')
+    header = header.strip('#').strip()
+    return header, data
 
-    the transformation basis can be set with the 'basis' argument, which should be a Basis enum set to a valid value. 
+def multi_csv_header(path):
+    path = path.replace('*', '{0}')
+    n = 0
+    header = None
+    data = []
+    while True:
+        pathactual = path.format(n)
+        if not os.path.exists(pathactual):
+            break
+        if header == None:
+            with open(pathactual, mode='r') as fp:
+                header = fp.readline()
+        tmp = np.loadtxt(pathactual, delimiter=',')
+        data.append(tmp)
+        n += 1
+    return n, header, data
 
-    a custom basis may be provided as a tuple of two functions - the first being a function of one parameter, n, that returns the transformation matrix theta, and the second being a function of two parameters, p & s (n being the length of s), that applies the inverse of the first function to produce x. 
+_TLC = np.sqrt(2) 
+_TLC_SM = 0.95
 
-    the default basis is Discrete Cosine transformation
-
-    the algorithm mode can also be specified with the 'mode' argument. by default, the mode is l1 norm minimalisation via the CVXPY package. 
-    '''
-    if basis is None:
-        basis = Basis.DISCRETE_COSINE
-
-    generate = None
-    inverse = None
-    if type(basis) is Basis:
-        generate, inverse = _BASIS_FUNCTIONS[basis]
+def infer_length(header):
+    header = header.split()
+    fmat = header[0]
+    w, h = int(header[1]), int(header[2])
+    if fmat != 'theta':
+        return w*h
     else:
-        # TODO ensure check here to make sure no errors!
-        generate, inverse = basis
+        R = (w/2.) * _TLC
+        return int(np.pi * np.pow(R, 2) / _TLC_SM)
 
-    theta = generate(p, n, y)
+# create theta conversion grids (xy->t) and (t->xy)
+def theta_convert(radius):
+    # 2 pi r steps (rounded) per radius, radius * 1.5 steps outwards
+    # so effectively pi (r*1.5)^2
+    # call it pi r*1.6^2, and only take the N steps
 
-    if theta is None:
-        print(f'No theta could be found! theta is None')
+    width = int(2*radius)
+    grid = np.zeros((width, width))
+    l = int(np.pi * np.pow(radius * _TLC, 2) / _TLC_SM)
+    squid = np.zeros((l, 2))
+
+    max_R = int(radius * _TLC)
+    N = 0
+    for r in np.arange(0, max_R):
+        max_Th = int(r * np.pi * 2 * (1/_TLC_SM))
+        for theta in np.linspace(0, 2*np.pi, max_Th):
+            X = np.round((np.cos(theta) * r) + radius).astype(int)
+            Y = np.round((np.sin(theta) * r) + radius).astype(int)
+            if X in range(0, width) and Y in range(0, width):
+                grid[Y, X] = N
+                squid[N] = (X, Y)
+            N += 1
+    squid = np.array(squid)
+    squid = squid.astype(int)
+    grid = grid.astype(int)
+    return grid, squid
+
+
+
+# TODO
+def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
+    '''
+    Runs a reconstructive algorithm for sampled data Y with positions P, and signal length N, with a given basis defined by the basis attribute. Returns the reconstructed signal.
+    '''
+
+    # MODIFICATION:
+    # Add the basis name to ACCEPTED_BASISES. Can optionally add aliases (shortcuts) in the BASIS_ALIASES dict.
+    # Then add a case to the match statement below for your basis string and implement it there.
+
+    BASIS_ALIASES = {
+        'dct' : 'discrete-cosine',
+        'fft' : 'fourier-transform',
+        'hdd' : 'hadamard'
+    }
+
+    ACCEPTED_BASISES = [
+        'discrete-cosine',
+        'fourier-transform',
+        'hadamard',
+    ]
+
+    if basis in BASIS_ALIASES:
+        basis = BASIS_ALIASES[basis]
+
+    if basis not in ACCEPTED_BASISES:
         return None
 
-    if mode=='cosamp':
-        s = cosamp(theta, y, sparsity, epsilon, max_iter)
-    elif mode=='cvx':
-        s_l1 = cp.Variable(n, complex=True)
-        obj = cp.Minimize(cp.norm(s_l1, 1))
-        cons = [theta @ s_l1 == np.conjugate(y)]
-        problem = cp.Problem(obj, cons)
-        problem.solve(verbose=verbose)
-        s = s_l1.value
+    match basis:
+        case 'discrete-cosine':
+            theta = dct(np.eye(N, N))[P,:]
 
-    return inverse(p, n, theta, s)
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
 
+            return np.real(idct(s_l1.value))
+        case 'fourier-transform':
+            theta = dft(N)[P,:]
 
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.real(np.flip(ifft(s_l1.value)))
+        case 'hadamard':
+            theta = (hadamard(N) / np.sqrt(N))[P, :]
+            
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.dot(hadamard(N) / np.sqrt(N), s_l1.value)
+
+    return np.zeros(N)
+
+'''
+Command-line parsing functions
+'''
+
+# PIPE FORMAT: header, [Xn]
+# INPUT PIPE: header, P, [Yn]
 def reconstruct(args, pipe:bool=False, inp:any = None):
     if type(args) == str:
         args = args.split()
 
-    if len(args) == 0:
+    if len(args) == 0 and inp == None:
         print('''
 cspy reconstruct
 
-
 usage:
     py cspy.py reconstruct (path/to/vectors) 
-    Reconstructs data based on the contents of the vectors. All vectors should be in the standard 1D sampled vector format. At least one vector file should be a sample position vector P.
+    Reconstructs data based on the contents of the vectors. All vectors should be in the standard 1D sampled vector format. At least one vector file should be a sample position vector 'P.csv' - all others would be of form 'Yn.csv', but the names can be arbitrary.
 
 arguments:
     -o, --out (path)
         specifies the save path for all of the output files. Xn.csv will be appended to each output.
 
     -b, --basis (basis)
+        specifies the transformation basis to be used. valid basises are:
+            dct (discrete-cosine), fourier (fourier-transform)
 
+    -v, --verbose
+        toggles on verbosity of the CVX solver
 ''')
         return ltret(0, pipe)
+
+    BASIS = 'discrete-cosine'
+    IN_PATH = []
+    OUT_PATH = None
+    VERBOSE = False
+
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg in ('-o', '--out'):
+            idx += 1
+            OUT_PATH = args[idx]
+        elif arg in ('-b', '--basis'):
+            idx += 1
+            BASIS = args[idx]
+        elif arg in ('-v', '--verbose'):
+            VERBOSE = True
+        else:
+            IN_PATH.append(arg)
+        idx += 1
+
+    # process all file paths
+    P = None
+    Y = []
+    header = None
+
+    if len(IN_PATH) == 0:
+        if inp != None:
+            IN_PATH = [inp[0]]
+            pack = inp[1]
+            header = pack[0]
+            P = pack[1]
+            Y = pack[2]
+        else:
+            print(f'No input paths given!')
+            return ltret(-1, pipe)
+    else:
+        for path in IN_PATH:
+            if '*' in path:
+                N, _, tmp = multi_csv_header(path)
+                Y += tmp
+            else:
+                tH, tD = csv_header(path)
+                if 'P.csv' in path:
+                    P = tD
+                    header = tH
+                else:
+                    Y.append(tD)
+
+    if OUT_PATH == None:
+        OUT_PATH = IN_PATH[0].replace('*', '_') + '.'
+
+    N = infer_length(header)
+    # We now have P, Y and N. we now can do our processes!
+    X = []
+    if type(P) is not list:
+        P = P.astype(int)
+    n = 0
+    for Yn in Y:
+        tmp = RECONSTRUCT_DRIVER(Yn, P, N, BASIS, verbose=VERBOSE)
+        tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
+        print(f'{np.min(tmp)} -> {np.max(tmp)}')
+        if tmp is None:
+            print(f'CVX didn\'t work! Likely a bad basis specification...')
+            return ltret(-2, pipe)
+        X.append(tmp)
+        np.savetxt(f'{OUT_PATH}X{n}.csv', tmp, fmt='%f', delimiter=',', header=header)
+        n += 1
+
+    if pipe:
+        return ltret(0, payload=(OUT_PATH, [header, X]))
+
+    return ltret(0, pipe)
+
     
 # PIPE FORMAT: header, P, [Yn]
 # INPUT PIPE: header, data
@@ -167,7 +336,7 @@ def sample(args, pipe:bool=False, inp:any = None):
     if type(args) == str:
         args = args.split()
 
-    if len(args) == 0:
+    if len(args) == 0 and inp == None:
         print('''
 cspy sample
 Samples a given vectorized signal, saving under vectors Yn and P where Yn is the sampled data from channel 'n', and P is the sample position array. both .csv files will have the format of the source image (such as xy X Y), stored at the first line as a header comment (which can then be expressed to find the full size).
@@ -248,7 +417,7 @@ def vector(args, pipe:bool = False, inp:any = None):
     if type(args) == str:
         args = args.split()
     
-    if len(args) == 0:
+    if len(args) == 0 and inp == None:
         print('''
     cspy vector
     Vectorizes a 2d width by height image into a 1D vector format. The method used to vectorize the 2D array is defined by the pattern argument, which defaults to 'xy'.
@@ -395,7 +564,16 @@ def vector(args, pipe:bool = False, inp:any = None):
         case 'zigzag':
             pass
         case 'theta':
-            pass
+            w, h, c = image.shape
+            if w != h:
+                print(f'Error! Theta operation requires square image. dimensions {w}, {h}')
+                return ltret(-5, pipe)
+            radius = w/2.0
+            grid, squid = theta_convert(radius)
+
+            x, y = squid[:,0], squid[:, 1]
+            out = image[y, x]
+            header = f'theta {w} {h}'
 
     if not SEPARATE:
         np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
@@ -421,7 +599,7 @@ def devector(args, pipe:bool = False, inp:any = None):
     if type(args) == str:
         args = args.split()
     
-    if len(args) == 0:
+    if len(args) == 0 and inp == None:
         print('''
     cspy devector
     Devectorizes a signal back into an image.
@@ -457,7 +635,7 @@ def devector(args, pipe:bool = False, inp:any = None):
     if IN_PATH == None:
         if inp != None:
             IN_PATH = inp[0]
-            header = inp[1][0]
+            header = inp[1][0].strip('# ')
             data = inp[1][1]
             if type(data) == list:
                 MULTI_DATA = True
@@ -528,7 +706,17 @@ def devector(args, pipe:bool = False, inp:any = None):
                     channel = np.transpose(channel, axes=(1, 0, 2))
                     image[:,:,n] = channel
                     n += 1
+        case 'theta':
+            x = int(header[1])
+            y = int(header[2])
+            rad = x/2.
+            grid, squid = theta_convert(rad)
 
+            image = data[grid]
+            print(f'got image {image.shape}')
+
+    if len(image.shape) == 3 and image.shape[2] == 1:
+        image = image[:,:,0]
 
     plt.imsave(OUT_PATH, image)
     if pipe:
@@ -542,7 +730,7 @@ def monochrome(args, pipe:bool = False, inp:any = None):
     if type(args) == str:
         args = args.split()
     
-    if len(args) == 0:
+    if len(args) == 0 and inp == None:
         print('''
     cspy monochrome
     Turns an image into a monochrome image (RGB->G), discarding any alpha channels.
@@ -600,14 +788,13 @@ def monochrome(args, pipe:bool = False, inp:any = None):
     outimg = np.sqrt(np.pow(r, 2) + np.pow(g, 2) + np.pow(b, 2))
     outimg = outimg * 255
     outimg = outimg.astype(int)
-
     plt.imsave(OUT_PATH, outimg, cmap='gray')
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, outimg))
     return ltret(0, pipe)
 
-def cspy_engine(args):
+def cspy_engine(args, pipe:bool=False, inp:any = None, print_cli:bool = False):
     if type(args) == str:
         args = args.split()
 
@@ -632,19 +819,24 @@ sample:
     
 reconstruct:
     Given appropriate data (samples and sample coordinates), reconstructs an image.
-    Data should be given in two files, both containing 1-dimensional CSV formats - sample position array P, and sample array Y (where P stores the location of each Y in the full datastream of size N). 
-    Basises can be chosen for reconstruction.
+    Data should be given in two paths, both containing 1-dimensional CSV formats - sample position array P, and sample array Y (where P stores the location of each Y in the full datastream of size N).
 
-help:
-    Displays information about command line parameters
+devector:
+    Converts CSV vector files back into image files.
+
+monochrome:
+    Converts a RGB image into a monochromatic (grayscale) image.
+    
 ''')
-        exit(0)
+        return
 
     big_argstring = ' '.join(args)
     argstrings = big_argstring.split(',')
     if len(argstrings) > 1:
-        prior_state = None
-        print(f'Executing pipeline...')
+        prior_state = inp
+        if print_cli:
+            print(f'Executing pipeline...')
+
         for args in argstrings:
             args = args.split()
             mode = args[0].lower()
@@ -653,45 +845,50 @@ help:
                 case 'sample':
                     code, prior_state = sample(args[1:], pipe=True, inp=prior_state)
                     if code != 0:
-                        exit(0)
+                        return code
                 case 'vector':
                     code, prior_state = vector(args[1:], pipe=True, inp=prior_state)
                     if code != 0:
-                        exit(0)
+                        return code
                 case 'devector':
                     code, prior_state = devector(args[1:], pipe=True, inp=prior_state)
                     if code != 0:
-                        exit(0)
+                        return code
                 case 'reconstruct':
-                    pass
+                    code, prior_state = reconstruct(args[1:], pipe=True, inp=prior_state)
+                    if code != 0:
+                        return code
                 case 'help':
                     pass
                 case 'monochrome':
                     code, prior_state = monochrome(args[1:], pipe=True, inp=prior_state)
                     if code != 0:
-                        exit(0)
+                        return code
                 case _:
                     print(f'Unrecognized mode {mode}')
-                    exit(-1)
+                    return -1
+        if pipe:
+            return (0, prior_state)
+        return 0
     else:
         mode = args[0].lower()
 
         if mode == 'sample':
-            exit(sample(args[1:]))
+            return sample(args[1:], pipe, inp)
         elif mode == 'suite':
             pass
         elif mode == 'reconstruct':
-            pass
-        elif mode == 'help':
-            pass
+            return reconstruct(args[1:], pipe, inp)
         elif mode == 'vector':
-            exit(vector(args[1:]))
+            return vector(args[1:], pipe, inp)
         elif mode == 'devector':
-            exit(devector(args[1:]))
+            return devector(args[1:], pipe, inp)
         elif mode == 'monochrome':
-            exit(monochrome(args[1:]))
+            return monochrome(args[1:], pipe, inp)
         else:
-            print(f'Unrecognized mode {mode}')
+            if print_cli:
+                print(f'Unrecognized mode {mode}')
+            return ltret(-1, pipe)
 
 if __name__ == '__main__':
-    cspy_engine(sys.argv[1:])
+    exit(cspy_engine(sys.argv[1:]))
