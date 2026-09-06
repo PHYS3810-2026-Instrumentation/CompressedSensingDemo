@@ -8,7 +8,6 @@ from scipy.signal import unit_impulse
 from scipy.ndimage import zoom
 import cvxpy as cp
 from enum import Enum
-from numba import jit
 
 class Basis(Enum):
     RANDOM = 0
