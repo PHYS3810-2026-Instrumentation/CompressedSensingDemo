@@ -161,7 +161,9 @@ def theta_convert(radius):
     grid = grid.astype(int)
     return grid, squid
 
-
+# 
+def snake_path(w, h):
+    pass
 
 # TODO
 def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
@@ -332,6 +334,7 @@ arguments:
     
 # PIPE FORMAT: header, P, [Yn]
 # INPUT PIPE: header, data
+# INPUT PIPE: image
 def sample(args, pipe:bool=False, inp:any = None):
     if type(args) == str:
         args = args.split()
@@ -348,11 +351,17 @@ usage:
 arguments:
     -o, --out (path)
         specifies the save path for all of the output files. Yn.csv, P.csv will be appended per file. If not specified, the input path will be used.
+
+    -m, --mask (path)
+        specifies the path to a sample mask from which the samples will be taken.
+        sample mask should be an all-or-none vector of the same length as the input vector
 ''')
         return ltret(0, pipe)
     IN_PATH = None
     OUT_PATH = None
     PERCENT = None
+    MASK_PATH = None
+    IS_IMAGE_SAMPLE = False
 
     idx = 0
     while idx < len(args):
@@ -360,6 +369,9 @@ arguments:
         if arg in ('-o', '--out'):
             idx += 1
             OUT_PATH = args[idx]
+        elif arg in ('-m', '--mask'):
+            idx += 1
+            MASK_PATH = args[idx]
         else:
             if arg.endswith("%"):
                 PERCENT = float(arg[:-1]) / 100.
@@ -369,43 +381,86 @@ arguments:
         idx += 1
 
     header, data = None, None
+    IMAGE_TYPES = ('jpg', 'jpeg', 'png')
     if IN_PATH == None:
         if inp != None:
             IN_PATH = inp[0]
-            header = inp[1][0]
-            data = inp[1][1]
+            inp_payl = inp[1]
+            if IN_PATH.split('.')[-1] in IMAGE_TYPES:
+                data = inp_payl
+                header = None
+                IS_IMAGE_SAMPLE = True
+            else:
+                header = inp[1][0]
+                data = inp[1][1]
+                IS_IMAGE_SAMPLE = False
+                header = header.strip('#').strip()
         else:
             print(f'No input given!')
             return ltret(-1, pipe)
     else:
-        with open(IN_PATH, mode='r') as fp:
-            header = fp.readline()
-        data = np.loadtxt(IN_PATH, delimiter=',')
-
-    header = header.strip('# ')
-    if PERCENT == None:
-        print(f'No percentage given!')
-        return ltret(-2, pipe)
+        if IN_PATH.split('.')[-1] in IMAGE_TYPES:
+            data = plt.imread(IN_PATH)
+            header = None
+            IS_IMAGE_SAMPLE = True
+        else:
+            header, data = csv_header(IN_PATH)
+            IS_IMAGE_SAMPLE = False
 
     if OUT_PATH == None:
-        OUT_PATH = IN_PATH
+        OUT_PATH = IN_PATH + '.'
+        if IS_IMAGE_SAMPLE:
+            OUT_PATH += 'sample.jpg'
 
-    N = data.shape[0]
-    channels = data.shape[1]
+    if IS_IMAGE_SAMPLE:
+        w, h = data.shape[0], data.shape[1]
+        N = w*h
+    else:
+        N = data.shape[0]
+        channels = data.shape[1]
+    
+    P = None
+    if MASK_PATH != None:
+        m_header, m_data = csv_header(MASK_PATH)
+        # ensure both headers match?
+        if header != None and m_header != header:
+            pass
+        if m_data.shape[0] != N:
+            print(f'Invalid sample vector size: {m_data.shape[0]} mismatch {N}')
+            return ltret(-10, pipe)
+        # turn it into a 1d if it isnt already (i.e. 1 where any in the row is 1)
 
-    P = take_samples(N, int(PERCENT * N))
+        m_data = np.where(m_data != 0, True, False)
+        if len(m_data.shape) > 1:
+            m_data = np.any(m_data, axis=(1))
+        P = np.argwhere(m_data)
+    else:
+        if PERCENT == None:
+            print(f'No percentage given!')
+            return ltret(-2, pipe)
+        P = take_samples(N, int(PERCENT * N))
 
-    Y = []
-    for channel in range(channels):
-        temp = data[P, channel]
-        Y.append(np.array(temp))
+    if IS_IMAGE_SAMPLE:
+        sample_mask = np.zeros((N, 3))
+        sample_mask[P] = np.ones(3) * 255
+        sample_mask = sample_mask.astype(np.uint8)
+        w, h = data.shape[0], data.shape[1]
+        sample_mask_image = np.reshape(sample_mask, (w, h, 3))
+        plt.imsave(OUT_PATH, sample_mask_image)
+        if pipe:
+            return ltret(0, payload=(OUT_PATH, sample_mask_image))
+    else:
+        Y = []
+        for channel in range(channels):
+            temp = data[P, channel]
+            Y.append(np.array(temp))
 
-    np.savetxt(f'{OUT_PATH}.P.csv', P, fmt='%d', delimiter=',', header=header)
-    for n in range(channels):
-        np.savetxt(f'{OUT_PATH}.Y{n}.csv', Y[n], fmt='%f', delimiter=',\t', header=header)
+        np.savetxt(f'{OUT_PATH}P.csv', P, fmt='%d', delimiter=',', header=header)
+        for n in range(channels):
+            np.savetxt(f'{OUT_PATH}Y{n}.csv', Y[n], fmt='%f', delimiter=',\t', header=header)
 
-    if pipe:
-        return ltret(0, payload=(OUT_PATH, (header, P, Y)))
+        if pipe:
+            return ltret(0, payload=(OUT_PATH, (header, P, Y)))
     
     return ltret(0, pipe)
 
@@ -713,7 +768,6 @@ def devector(args, pipe:bool = False, inp:any = None):
             grid, squid = theta_convert(rad)
 
             image = data[grid]
-            print(f'got image {image.shape}')
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
