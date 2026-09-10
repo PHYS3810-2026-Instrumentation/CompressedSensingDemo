@@ -162,8 +162,37 @@ def theta_convert(radius):
     return grid, squid
 
 # 
-def snake_path(w, h):
-    pass
+def snake_square_path(w, h):
+    N = w * h
+    grid = np.zeros((w, h), dtype=int)
+    squid = np.zeros((N, 2))
+
+    n = 0
+    precess = [w, h]
+    presign = [+1, -1]
+    flip = 0
+    squid[-1] = [0, 0]
+    while n < N:
+        # generate a trace path and an N path
+        stride = precess[flip]
+        walk = presign[flip] * stride
+        n_stride = np.arange(n, n+stride)
+        rootx, rooty = squid[n-1]
+        if flip == 0:
+            # width stride
+            grid[rooty, rootx + walk] = n_stride
+            squid[n_stride] = (rootx + walk, np.array([rooty] * stride))
+        else:
+            # height stride
+            grid[rooty + stride, rootx] = n_stride
+            squid[n_stride] = (np.array([rootx] * stride), rooty + walk)
+
+        n += n_stride
+
+        # flip flip and decrement precess
+        flip = 1-flip
+        precess[flip] = precess[flip] - 1
+        presign[flip] = -presign[flip]
 
 # TODO
 def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
@@ -178,6 +207,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
     BASIS_ALIASES = {
         'dct' : 'discrete-cosine',
         'fft' : 'fourier-transform',
+        'fourier' : 'fourier-transform',
         'hdd' : 'hadamard'
     }
 
@@ -318,7 +348,7 @@ arguments:
     for Yn in Y:
         tmp = RECONSTRUCT_DRIVER(Yn, P, N, BASIS, verbose=VERBOSE)
         tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
-        print(f'{np.min(tmp)} -> {np.max(tmp)}')
+        # print(f'{np.min(tmp)} -> {np.max(tmp)}')
         if tmp is None:
             print(f'CVX didn\'t work! Likely a bad basis specification...')
             return ltret(-2, pipe)
@@ -432,8 +462,11 @@ arguments:
 
         m_data = np.where(m_data != 0, True, False)
         if len(m_data.shape) > 1:
+            if m_data.shape[1] == 4:
+                m_data = m_data[:,0:3]
             m_data = np.any(m_data, axis=(1))
-        P = np.argwhere(m_data)
+        P = np.argwhere(m_data)[:,0]
+        P = np.reshape(P, (P.shape[0]))
     else:
         if PERCENT == None:
             print(f'No percentage given!')
@@ -732,6 +765,7 @@ def devector(args, pipe:bool = False, inp:any = None):
     header = header.split()
     format_type = header[0]
     image = None
+
     match format_type:
         case 'xy':
             x = int(header[1])
@@ -767,7 +801,14 @@ def devector(args, pipe:bool = False, inp:any = None):
             rad = x/2.
             grid, squid = theta_convert(rad)
 
-            image = data[grid]
+            x_addr, y_addr = squid[:,0], squid[:, 1]
+            if MULTI_DATA:
+                image = np.zeros((x, y, len(data)))
+                for n in range(len(data)):
+                    image[y_addr, x_addr, n] = data[n]
+            else:
+                image = np.zeros((x, y, data.shape[1]))
+                image[y_addr, x_addr] = data
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
