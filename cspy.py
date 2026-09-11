@@ -9,8 +9,12 @@ from scipy.ndimage import zoom
 import cvxpy as cp
 from enum import Enum
 from numba import jit
-import pywt
+# import pywt
 from sklearn.decomposition import PCA
+
+'''
+Functions necessary to enable various transform basises
+'''
 
 def _get_haar_slices(n):
     max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
@@ -260,7 +264,48 @@ def _morlet_inverse(s, n):
         
     return recon
 
+'''
+Data structures, global variables & useful functions
+'''
+
 VALID_PATTERNS = ['xy', 'yx', 'zigzag', 'theta', 'snake_square', 'snake_square_inv']
+
+_TLC = np.sqrt(2) 
+_TLC_SM = 0.95
+
+BASIS_ALIASES = {
+        'dct' : 'discrete-cosine',
+        'fft' : 'fourier-transform',
+        'fourier' : 'fourier-transform',
+        'ha' : 'haar',
+        'hdd' : 'hadamard',
+        'db' : 'daubechies',
+        'kl' : 'karhunen-loeve',
+        'bo' : 'biorthagonal',
+        'cdf53' : 'cohen-daubechies-feauveau-5-3',
+        'cdf971' : 'cohen-daubechies-feauveau-1st-9-7',
+        'cdf972' : 'cohen-daubechies-feauveau-2nd-9-7',
+        'ihdd' : 'improved-hadamard',
+        'ifft' : 'improved-fourier',
+        'ml' : 'morlet',
+}
+
+ACCEPTED_BASISES = [
+        'discrete-cosine',
+        'fourier-transform',
+        'hadamard',
+        'haar',
+        'daubechies',
+        'karhunen-loeve',
+        'biorthagonal',
+        'cohen-daubechies-feauveau-5-3',
+        'cohen-daubechies-feauveau-1st-9-7',
+        'cohen-daubechies-feauveau-2nd-9-7',
+        'improved-hadamard',
+        'improved-fourier',
+        'morlet',
+]
+
 
 KL_basis_matrix = PCA(n_components=1024).fit(np.eye(1024)).components_
 
@@ -369,9 +414,6 @@ def multi_csv_header(path):
         data.append(tmp)
         n += 1
     return n, header, data
-
-_TLC = np.sqrt(2) 
-_TLC_SM = 0.95
 
 def infer_length(header):
     header = header.split()
@@ -507,41 +549,8 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
 
     # MODIFICATION:
     # Add the basis name to ACCEPTED_BASISES. Can optionally add aliases (shortcuts) in the BASIS_ALIASES dict.
+    # (Both of these structures are above)
     # Then add a case to the match statement below for your basis string and implement it there.
-
-    BASIS_ALIASES = {
-        'dct' : 'discrete-cosine',
-        'fft' : 'fourier-transform',
-        'fourier' : 'fourier-transform',
-        'ha' : 'haar',
-        'hdd' : 'hadamard',
-        'db' : 'daubechies',
-        'kl' : 'karhunen-loeve',
-        'bo' : 'biorthagonal',
-        'cdf53' : 'cohen-daubechies-feauveau-5-3',
-        'cdf971' : 'cohen-daubechies-feauveau-1st-9-7',
-        'cdf972' : 'cohen-daubechies-feauveau-2nd-9-7',
-        'ihdd' : 'improved-hadamard',
-        'ifft' : 'improved-fourier',
-        'ml' : 'morlet',
-
-    }
-
-    ACCEPTED_BASISES = [
-        'discrete-cosine',
-        'fourier-transform',
-        'hadamard',
-        'haar',
-        'daubechies',
-        'karhunen-loeve',
-        'biorthagonal',
-        'cohen-daubechies-feauveau-5-3',
-        'cohen-daubechies-feauveau-1st-9-7',
-        'cohen-daubechies-feauveau-2nd-9-7',
-        'improved-hadamard',
-        'improved-fourier',
-        'morlet',
-    ]
 
     if basis in BASIS_ALIASES:
         basis = BASIS_ALIASES[basis]
@@ -692,7 +701,8 @@ def reconstruct(args, pipe:bool=False, inp:any = None):
         args = args.split()
 
     if len(args) == 0 and inp == None:
-        print('''
+        basises = '\n'.join([f'\t\t{e} ({', '.join([k[0] for k in BASIS_ALIASES.items() if k[1] == e])})' for e in ACCEPTED_BASISES])
+        print(f'''
 cspy reconstruct
 
 usage:
@@ -702,13 +712,15 @@ usage:
 arguments:
     -o, --out (path)
         specifies the save path for all of the output files. Xn.csv will be appended to each output.
-
-    -b, --basis (basis)
-        specifies the transformation basis to be used. valid basises are:
-            dct (discrete-cosine), fourier (fourier-transform)
-
+    
     -v, --verbose
         toggles on verbosity of the CVX solver
+
+    -b, --basis (basis)
+        specifies the transformation basis to be used. The default basis is 'discrete-cosine'.
+        Supported transformation bases (aliases):
+{basises}
+
 ''')
         return ltret(0, pipe)
 
