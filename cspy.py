@@ -10,6 +10,8 @@ import cvxpy as cp
 from enum import Enum
 from numba import jit
 
+VALID_PATTERNS = ['xy', 'yx', 'zigzag', 'theta', 'snake_square', 'snake_square_inv']
+
 class Basis(Enum):
     RANDOM = 0
     DISCRETE_COSINE = 1
@@ -134,6 +136,42 @@ def infer_length(header):
         R = (w/2.) * _TLC
         return int(np.pi * np.pow(R, 2) / _TLC_SM)
 
+def image_shape_props(image):
+    if len(image.shape) == 3:
+        return image.shape
+    return image.shape[0], image.shape[1], 1
+
+def is_intlike_image(image:np.ndarray)->bool:
+    '''
+    Returns true if the image is an int-like image (i.e. valued from 0-255) but is not stored with the int type. False otherwise.'''
+    mx, mn = np.max(image), np.min(image)
+    _FLOAT_LIKE = (np.float32, np.float64)
+    if image.dtype not in _FLOAT_LIKE:
+        return False
+    if mx > 1 or mn > 1:
+        return True
+    return False
+
+def remove_filetype_path(path):
+    prefix = ''
+    if path.startswith('./'):
+        path = path[2:]
+        prefix = './'
+    tmp = path.split('.')
+    if len(tmp) <= 1:
+        return prefix + path
+    return prefix + '.'.join(tmp[:-1])
+
+def get_filetype_path(path):
+    prefix = ''
+    if path.startswith('./'):
+        path = path[2:]
+        prefix = './'
+    tmp = path.split('.')
+    if len(tmp) <= 1:
+        return ''
+    return tmp[-1]
+
 # create theta conversion grids (xy->t) and (t->xy)
 def theta_convert(radius):
     # 2 pi r steps (rounded) per radius, radius * 1.5 steps outwards
@@ -161,7 +199,7 @@ def theta_convert(radius):
     grid = grid.astype(int)
     return grid, squid
 
-# 
+# create outer snake square path grids (xy->t) and (t->xy)
 def snake_square_path(w, h):
     N = w * h
     grid = np.zeros((w, h), dtype=int)
@@ -178,21 +216,41 @@ def snake_square_path(w, h):
         walk = presign[flip] * stride
         n_stride = np.arange(n, n+stride)
         rootx, rooty = squid[n-1]
+        # print(f'({rootx}, {rooty}) ({stride}), flip={flip}, walk={walk}')
         if flip == 0:
             # width stride
-            grid[rooty, rootx + walk] = n_stride
-            squid[n_stride] = (rootx + walk, np.array([rooty] * stride))
+            walk_set = np.arange(rootx, rootx+walk, step=presign[flip], dtype=int)
+            stand_set = np.array([rooty] * stride, dtype=int)
+            grid[stand_set, walk_set] = n_stride
+            squid[n_stride, 0] = walk_set
+            squid[n_stride, 1] = stand_set
         else:
             # height stride
-            grid[rooty + stride, rootx] = n_stride
-            squid[n_stride] = (np.array([rootx] * stride), rooty + walk)
+            walk_set = np.arange(rooty, rooty+walk, step=presign[flip], dtype=int)
+            stand_set = np.array([rootx] * stride, dtype=int)
+            grid[walk_set, stand_set] = n_stride
+            squid[n_stride, 0] = stand_set
+            squid[n_stride, 1] = walk_set
 
-        n += n_stride
+        n += stride
 
         # flip flip and decrement precess
         flip = 1-flip
         precess[flip] = precess[flip] - 1
         presign[flip] = -presign[flip]
+
+    squid = np.array(squid)
+    squid = squid.astype(int)
+    grid = grid.astype(int)
+    return grid, squid
+
+# creates an inverted version of the snake_square_path
+def snake_inv_square_path(w, h):
+    N = w * h
+    grid, squid = snake_square_path(w, h)
+    grid = N - grid
+    squid = np.flip(squid, axis=0)
+    return grid, squid
 
 # TODO
 def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
@@ -312,11 +370,13 @@ arguments:
     P = None
     Y = []
     header = None
+    P_path = None
 
     if len(IN_PATH) == 0:
         if inp != None:
             IN_PATH = [inp[0]]
             pack = inp[1]
+            P_path = IN_PATH[0]
             header = pack[0]
             P = pack[1]
             Y = pack[2]
@@ -331,13 +391,23 @@ arguments:
             else:
                 tH, tD = csv_header(path)
                 if 'P.csv' in path:
+                    P_path = path
                     P = tD
                     header = tH
                 else:
                     Y.append(tD)
 
+    if P is None:
+        print(f'No P vector given!')
+        return ltret(-1, pipe)
+
+    if len(Y) == 0:
+        print(f'No sample vectors given!')
+        return ltret(-2, pipe)
+
     if OUT_PATH == None:
-        OUT_PATH = IN_PATH[0].replace('*', '_') + '.'
+        # print(P_path)
+        OUT_PATH = remove_filetype_path(P_path) + 're_'
 
     N = infer_length(header)
     # We now have P, Y and N. we now can do our processes!
@@ -438,7 +508,7 @@ arguments:
             IS_IMAGE_SAMPLE = False
 
     if OUT_PATH == None:
-        OUT_PATH = IN_PATH + '.'
+        OUT_PATH = remove_filetype_path(IN_PATH) + '_'
         if IS_IMAGE_SAMPLE:
             OUT_PATH += 'sample.jpg'
 
@@ -506,7 +576,7 @@ def vector(args, pipe:bool = False, inp:any = None):
         args = args.split()
     
     if len(args) == 0 and inp == None:
-        print('''
+        print(f'''
     cspy vector
     Vectorizes a 2d width by height image into a 1D vector format. The method used to vectorize the 2D array is defined by the pattern argument, which defaults to 'xy'.
     
@@ -519,8 +589,10 @@ def vector(args, pipe:bool = False, inp:any = None):
             specifies the save path for all of the output files. If not specified, the input path will be used with X.csv appended.
         
         -p, --pattern (pattern)
-            specifies the type of pattern to be used for vectorizing. valid patterns are 'xy', 'yx', 'zigzag', 'theta' and 'snake'. note that 'theta' and 'snake' will only work if the given image is square!
+            specifies the type of pattern to be used for vectorizing. valid patterns are shown below. note that 'theta' will only work if the given image is square!
             defaults to 'xy'
+            patterns: 
+                {VALID_PATTERNS}
         
         -r, --resize (w=(integer)|h=(integer))
             resizes the image before vectorizing such that either the X axis is the given width, or the Y axis is the given height
@@ -593,11 +665,13 @@ def vector(args, pipe:bool = False, inp:any = None):
     if MONO_IMAGE:
         image = np.reshape(image, (image.shape[0], image.shape[1], 1))
     RAW_OUT_PATH = OUT_PATH
+
     if OUT_PATH == None:
         if SEPARATE:
-            OUT_PATH = IN_PATH + '.X{0}.csv'
+            OUT_PATH = remove_filetype_path(IN_PATH) + '_X{0}.csv'
         else:
-            OUT_PATH = f'{IN_PATH}.X.csv'
+            OUT_PATH = remove_filetype_path(IN_PATH) + '_X.csv'
+        RAW_OUT_PATH = OUT_PATH.format('*')
     elif SEPARATE:
         if '*' not in OUT_PATH:
             print(f'Out path does not have * character to denote index for separate channel files!')
@@ -627,7 +701,6 @@ def vector(args, pipe:bool = False, inp:any = None):
         if type(min) not in ALLOWED_DATATYPES and type(max) not in ALLOWED_DATATYPES:
             image = image / 255.0
 
-    VALID_PATTERNS = ['xy', 'yx', 'zigzag', 'theta', 'snake']
     if PATTERN is None:
         PATTERN = 'xy'
 
@@ -662,6 +735,21 @@ def vector(args, pipe:bool = False, inp:any = None):
             x, y = squid[:,0], squid[:, 1]
             out = image[y, x]
             header = f'theta {w} {h}'
+        case 'snake_square':
+            w, h, c = image_shape_props(image)
+
+            grid, squid = snake_square_path(w, h)
+            x, y = squid[:,0], squid[:, 1]
+            out = image[y, x]
+            header = f'snake_square {w} {h}'
+        case 'snake_square_inv':
+            w, h, c = image_shape_props(image)
+
+            grid, squid = snake_inv_square_path(w, h)
+            x, y = squid[:,0], squid[:, 1]
+            out = image[y, x]
+            header = f'snake_square_inv {w} {h}'
+            
 
     if not SEPARATE:
         np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
@@ -760,7 +848,7 @@ def devector(args, pipe:bool = False, inp:any = None):
             data = np.loadtxt(IN_PATH, delimiter=',')
 
     if OUT_PATH == None:
-        OUT_PATH = f'{IN_PATH}.png'
+        OUT_PATH = remove_filetype_path(IN_PATH) + '_devector.png'
 
     header = header.split()
     format_type = header[0]
@@ -807,12 +895,52 @@ def devector(args, pipe:bool = False, inp:any = None):
                 for n in range(len(data)):
                     image[y_addr, x_addr, n] = data[n]
             else:
-                image = np.zeros((x, y, data.shape[1]))
+                if len(data.shape) == 2:
+                    c = data.shape[1]
+                else:
+                    c = 1
+                image = np.zeros((x, y, c))
+                image[y_addr, x_addr] = data
+        case 'snake_square':
+            w = int(header[1])
+            h = int(header[2])
+
+            grid, squid = snake_square_path(w, h)
+            x_addr, y_addr = squid[:,0], squid[:, 1]
+            if MULTI_DATA:
+                image = np.zeros((w, h, len(data)))
+                for n in range(len(data)):
+                    image[y_addr, x_addr, n] = data[n]
+            else:
+                if len(data.shape) == 2:
+                    c = data.shape[1]
+                else:
+                    c = 1
+                image = np.zeros((w, h, c))
+                image[y_addr, x_addr] = data
+        case 'snake_square_inv':
+            w = int(header[1])
+            h = int(header[2])
+
+            grid, squid = snake_inv_square_path(w, h)
+            x_addr, y_addr = squid[:,0], squid[:, 1]
+            if MULTI_DATA:
+                image = np.zeros((w, h, len(data)))
+                for n in range(len(data)):
+                    image[y_addr, x_addr, n] = data[n]
+            else:
+                if len(data.shape) == 2:
+                    c = data.shape[1]
+                else:
+                    c = 1
+                image = np.zeros((w, h, c))
                 image[y_addr, x_addr] = data
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
 
+    if is_intlike_image(image):
+        image = image.astype(np.uint8)
     plt.imsave(OUT_PATH, image)
     if pipe:
         return ltret(0, payload=(OUT_PATH, image))
@@ -835,7 +963,7 @@ def monochrome(args, pipe:bool = False, inp:any = None):
     
     arguments:
         -o, --out (path)
-            specifies the save path for the output image. Defaults to a suffixed .png rendition of the given input.
+            specifies the save path for the output image. Defaults to a suffixed '_mono' rendition of the given input.
     ''')
         return ltret(0, pipe)
 
@@ -865,7 +993,7 @@ def monochrome(args, pipe:bool = False, inp:any = None):
         image = plt.imread(IN_PATH)
 
     if OUT_PATH == None:
-        OUT_PATH = f'{IN_PATH}mono.jpg'
+        OUT_PATH = remove_filetype_path(IN_PATH) + '_mono.' + get_filetype_path(IN_PATH)
 
     if len(image.shape) == 2:
         image = np.reshape(image, (image.shape[0], image.shape[1], 1))
