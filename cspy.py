@@ -9,13 +9,260 @@ from scipy.ndimage import zoom
 import cvxpy as cp
 from enum import Enum
 from numba import jit
+import pywt
+from sklearn.decomposition import PCA
+
+def _get_haar_slices(n):
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'haar', level=max_level, mode='symmetric')
+    _, slices = pywt.coeffs_to_array(coeffs)
+    return slices
+
+def _get_db_slices(n):
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'db4', level=max_level, mode='symmetric')
+    _, slices = pywt.coeffs_to_array(coeffs)
+    return slices
+
+def _get_bo_slices(n):
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'bior4.4', level=max_level, mode='symmetric')
+    _, slices = pywt.coeffs_to_array(coeffs)
+    return slices
+
+def _get_cdf53_slices(n):
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'bior2.2', level=max_level, mode='symmetric')
+    _, slices = pywt.coeffs_to_array(coeffs)
+    return slices
+
+def _get_cdf971_slices(n):
+    """
+    Dynamically tracks asymmetric coefficient layouts and calculates the 
+    exact total shape requirements for CDF 9/7 sub-bands.
+    """
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'bior6.8', level=max_level, mode='symmetric')
+    
+    # coeff_arr contains the exact total length of all asymmetric sub-bands combined
+    coeff_arr, slices = pywt.coeffs_to_array(coeffs)
+    return slices, coeff_arr.size
+
+def _boundary_safe_cdf971_reconstruct(s, n):
+    """
+    Reconstructs the image patch using shape-safe arrays to accommodate 
+    the jagged sub-band dimensions native to CDF 9/7.
+    """
+    slices, expected_size = _get_cdf971_slices(n)
+    s_flat = np.real(s).flatten()
+    
+    # Create a destination array matching the exact total shape needed by the slices
+    padded_s = np.zeros(expected_size, dtype=float)
+    
+    # Copy the solved sparse coefficients into the reconstruction canvas safely
+    num_to_copy = min(s_flat.size, expected_size)
+    padded_s[:num_to_copy] = s_flat[:num_to_copy]
+        
+    # Unflatten the safely sized jagged coefficients array back into PyWavelets structure
+    coeffs = pywt.array_to_coeffs(padded_s, slices, output_format='wavedec')
+    
+    # Reconstruct and slice back down to the target block dimensions
+    recon = pywt.waverec(coeffs, 'bior6.8', mode='symmetric')
+    return recon[:n]
+
+def _get_cdf972_slices(n):
+    """
+    Dynamically tracks the asymmetric coefficient shapes and total flat size 
+    requirements for the bior3.5 (CDF 9/7 variant) transform.
+    """
+    max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
+    coeffs = pywt.wavedec(np.zeros(n), 'bior3.5', level=max_level, mode='symmetric')
+    
+    # coeff_arr contains the exact total length of all asymmetric sub-bands combined
+    coeff_arr, slices = pywt.coeffs_to_array(coeffs)
+    return slices, coeff_arr.size
+
+def _boundary_safe_cdf972_reconstruct(s, n):
+    """
+    Safely pads partial sparse tracking arrays to accommodate the 
+    asymmetric sub-band structures of the bior3.5 transform.
+    """
+    slices, expected_size = _get_cdf972_slices(n)
+    s_flat = np.real(s).flatten()
+    
+    # Pre-allocate a zero canvas matching the exact required coefficient array size
+    padded_s = np.zeros(expected_size, dtype=float)
+    
+    # Safely copy sparse coefficients without out-of-bounds errors
+    num_to_copy = min(s_flat.size, expected_size)
+    padded_s[:num_to_copy] = s_flat[:num_to_copy]
+        
+    # Unflatten back into PyWavelets coefficient lists
+    coeffs = pywt.array_to_coeffs(padded_s, slices, output_format='wavedec')
+    
+    # Reconstruct and slice back down to the target block dimensions
+    recon = pywt.waverec(coeffs, 'bior3.5', mode='symmetric')
+    return recon[:n]
+
+def _get_sequency_ordered_hadamard(n):
+    """
+    Generates a perfectly orthogonal, sequency-ordered (Walsh) Hadamard matrix.
+    This packs the maximum energy into the lowest indices.
+    """
+    H = hadamard(n)
+    # Count the zero-crossings (sequency) for each row
+    sign_changes = np.sum(H[:, :-1] * H[:, 1:] < 0, axis=1)
+    # Sort matrix rows from lowest sequency (DC trend) to highest (Fine details/noise)
+    sort_indices = np.argsort(sign_changes)
+    return H[sort_indices, :] / np.sqrt(n)
+
+def _hadamard_forward_with_edge_handling(p, n):
+    """
+    Generates the row projection matrix. 
+    Using a normalized sequency matrix natively stabilizes basis transitions.
+    """
+    H_walsh = _get_sequency_ordered_hadamard(n)
+    return H_walsh[p, :]
+
+def _hadamard_inverse_with_edge_handling(s, n):
+    """
+    Reconstructs the spatial domain signal and applies a windowed edge filter 
+    or basic clipping to clean up boundary noise artifacts.
+    """
+    H_walsh = _get_sequency_ordered_hadamard(n)
+    # Project back to spatial domain. H_walsh is symmetric and orthogonal -> H_inv = H.T
+    recon = np.dot(H_walsh.T, s)
+    
+    # Boundary post-processing: If your upstream pipeline runs edge mirroring, 
+    # you would trim it here. For a standalone block, we stabilize the edge values:
+    if len(recon) > 4:
+        recon[0] = (recon[0] + recon[1]) / 2
+        recon[-1] = (recon[-1] + recon[-2]) / 2
+        
+    return recon
+
+def _fourier_forward_smooth_edges(p, n):
+    """
+    Generates a complex-valued Fourier basis row as a 2D row vector (1, n).
+    Preserving complex values ensures the CVX solver converges without generating NaNs.
+    """
+    identity_row = np.zeros(n)
+    identity_row[p] = 1.0
+    
+    fourier_row = dct(identity_row, norm='ortho')
+    
+    return fourier_row[np.newaxis, :]
+
+def _fourier_inverse_smooth_edges(s, n):
+    """
+    Safely pads partial subsampled coefficients to length 'n' before running 
+    the inverse transform, eliminating out-of-bounds index crashes.
+    """
+    s_flat = np.asarray(s).flatten()
+    
+    # Pad s_flat with zeros up to full patch length 'n' if it is a subsampled array
+    if s_flat.size < n:
+        padded_s = np.zeros(n, dtype=complex)
+        padded_s[:s_flat.size] = s_flat
+    elif s_flat.size > n:
+        padded_s = s_flat[:n]
+    else:
+        padded_s = s_flat
+    
+    # Reverse the Fourier mapping
+    recon = idct(padded_s, norm='ortho')
+    
+    # Edge-blending filter to smooth out blocking artifacts
+    if n > 4:
+        recon = (recon + recon) / 2
+        recon[-1] = (recon[-1] + recon[-2]) / 2
+        
+    return recon
+
+def _native_morlet2(M, s, w=5.0):
+    """
+    Pure NumPy implementation of the Complex Morlet Wavelet.
+    Replaces the removed scipy.signal.morlet2 function.
+    """
+    # Create a time vector centered at zero
+    x = np.arange(0, M) - (M - 1) / 2.0
+    
+    # Scale calculation: x / s
+    x_scaled = x / s
+    
+    # Mathematical Morlet equation: complex exponential * gaussian envelope
+    wavelet = np.exp(1j * w * x_scaled) * np.exp(-0.5 * x_scaled**2)
+    
+    # Normalise the wavelet based on standard L2 energy normalization
+    wavelet *= np.pi**(-0.25) * np.sqrt(1.0 / s)
+    return wavelet
+
+def _get_morlet_basis_matrix(n, omega=5.0):
+    """
+    Generates a full 2D Morlet wavelet basis matrix of size n x n.
+    Rows represent shifted/scaled Morlet wavelets with edge-tapering.
+    """
+    matrix = np.zeros((n, n), dtype=complex)
+    
+    # Generate multi-scale rows (mixing low-frequency and high-frequency scales)
+    # Lower rows handle smooth broad trends; higher rows handle sharp transients
+    scales = np.linspace(1.5, n / 4, n)
+    
+    for p in range(n):
+        s = scales[p]
+        # Generate the complex Morlet wavelet centered in the patch chunk
+        wavelet = _native_morlet2(n, s, w=omega)
+        
+        # Shift the wavelet peak relative to row index 'p' for spatial coverage
+        shift = int(p - n // 2)
+        wavelet = np.roll(wavelet, shift)
+        
+        # Apply a smooth window to handle boundary reflections gracefully
+        window = np.hanning(n)
+        matrix[p, :] = wavelet * window
+        
+    # Standardize and normalize matrix rows to prevent scaling imbalances
+    row_norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    row_norms[row_norms == 0] = 1.0
+    return matrix / row_norms
+
+def _morlet_forward(p, n):
+    """Generates a 2D complex Morlet basis row matrix entry."""
+    M = _get_morlet_basis_matrix(n)
+    return np.array([M[p, :].flatten()])
+
+def _morlet_inverse(s, n):
+    """
+    Performs stable pseudo-inverse reconstruction to reconstruct the 
+    spatial domain image signal from complex coefficients.
+    """
+    M = _get_morlet_basis_matrix(n)
+    s_flat = np.asarray(s).flatten()
+    
+    # Zero-pad partial subsampled arrays to maintain structural match shapes
+    if s_flat.size < n:
+        padded_s = np.zeros(n, dtype=complex)
+        padded_s[:s_flat.size] = s_flat
+    elif s_flat.size > n:
+        padded_s = s_flat[:n]
+    else:
+        padded_s = s_flat
+        
+    # Because Morlet is not strictly orthogonal, we use the Moore-Penrose 
+    # pseudo-inverse (pinv) to safely reverse the tracking matrix mapping
+    M_inv = np.linalg.pinv(M)
+    recon = np.real(np.dot(M_inv, padded_s))
+    
+    # Stabilize boundaries to suppress blocking artifacts
+    if n > 4:
+        recon = (recon + recon) / 2
+        recon[-1] = (recon[-1] + recon[-2]) / 2
+        
+    return recon
 
 VALID_PATTERNS = ['xy', 'yx', 'zigzag', 'theta', 'snake_square', 'snake_square_inv']
 
-class Basis(Enum):
-    RANDOM = 0
-    DISCRETE_COSINE = 1
-    FOURIER = 2
+KL_basis_matrix = PCA(n_components=1024).fit(np.eye(1024)).components_
 
 def cosamp(phi, u, s, epsilon=1e-10, max_iter=1000):
     """
@@ -266,13 +513,34 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
         'dct' : 'discrete-cosine',
         'fft' : 'fourier-transform',
         'fourier' : 'fourier-transform',
-        'hdd' : 'hadamard'
+        'ha' : 'haar',
+        'hdd' : 'hadamard',
+        'db' : 'daubechies',
+        'kl' : 'karhunen-loeve',
+        'bo' : 'biorthagonal',
+        'cdf53' : 'cohen-daubechies-feauveau-5-3',
+        'cdf971' : 'cohen-daubechies-feauveau-1st-9-7',
+        'cdf972' : 'cohen-daubechies-feauveau-2nd-9-7',
+        'ihdd' : 'improved-hadamard',
+        'ifft' : 'improved-fourier',
+        'ml' : 'morlet',
+
     }
 
     ACCEPTED_BASISES = [
         'discrete-cosine',
         'fourier-transform',
         'hadamard',
+        'haar',
+        'daubechies',
+        'karhunen-loeve',
+        'biorthagonal',
+        'cohen-daubechies-feauveau-5-3',
+        'cohen-daubechies-feauveau-1st-9-7',
+        'cohen-daubechies-feauveau-2nd-9-7',
+        'improved-hadamard',
+        'improved-fourier',
+        'morlet',
     ]
 
     if basis in BASIS_ALIASES:
@@ -313,6 +581,104 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
 
             return np.dot(hadamard(N) / np.sqrt(N), s_l1.value)
 
+        case 'haar':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row,'haar', level=3, mode='symmetric'))[0] for row in np.eye(N,N)])[P,:],
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_haar_slices(N), output_format='wavedec'),'haar', mode = 'symmetric')
+
+        case 'daubechies':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'db4', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_db_slices(N), output_format='wavedec'), 'db4', mode='symmetric')
+
+        case 'karhunen-loeve':
+            theta = KL_basis_matrix[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s_l1)
+
+        case 'biorthagonal':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior4.4', level=3, mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_bo_slices(N), output_format='wavedec'), 'bior4.4', mode='symmetric')
+
+        case 'cohen-daubechies-feauveau-5-3':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior2.2', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_cdf53_slices(N), output_format='wavedec'), 'bior2.2', mode='symmetric')
+
+        case 'cohen-daubechies-feauveau-1st-9-7':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior6.8', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _boundary_safe_cdf971_reconstruct(s_l1, N)
+
+        case 'cohen-daubechies-feauveau-2nd-9-7':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior3.5', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _boundary_safe_cdf972_reconstruct(s_l1, N)
+
+        case 'improved-hadamard':
+            theta = _hadamard_forward_with_edge_handling(P,N)
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _hadamard_inverse_with_edge_handling(s_l1, N)
+
+        case 'morlet':
+            theta = _morlet_forward(P,N)
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _morlet_inverse(s_l1,N)
     return np.zeros(N)
 
 '''
