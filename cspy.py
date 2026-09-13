@@ -16,6 +16,156 @@ from sklearn.decomposition import PCA
 Functions necessary to enable various transform basises
 '''
 
+# TODO
+def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
+    '''
+    Runs a reconstructive algorithm for sampled data Y with positions P, and signal length N, with a given basis defined by the basis attribute. Returns the reconstructed signal.
+    '''
+
+    # MODIFICATION:
+    # Add the basis name to ACCEPTED_BASISES. Can optionally add aliases (shortcuts) in the BASIS_ALIASES dict.
+    # (Both of these structures are above)
+    # Then add a case to the match statement below for your basis string and implement it there.
+
+    if basis in BASIS_ALIASES:
+        basis = BASIS_ALIASES[basis]
+
+    if basis not in ACCEPTED_BASISES:
+        return None
+
+    match basis:
+        case 'discrete-cosine':
+            theta = dct(np.eye(N, N))[P,:]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.real(idct(s_l1.value))
+        case 'fourier-transform':
+            theta = dft(N)[P,:]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.real(np.flip(ifft(s_l1.value)))
+        case 'hadamard':
+            theta = (hadamard(N) / np.sqrt(N))[P, :]
+            
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.dot(hadamard(N) / np.sqrt(N), s_l1.value)
+
+        case 'haar':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row,'haar', level=3, mode='symmetric'))[0] for row in np.eye(N,N)])[P,:],
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_haar_slices(N), output_format='wavedec'),'haar', mode = 'symmetric')
+
+        case 'daubechies':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'db4', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_db_slices(N), output_format='wavedec'), 'db4', mode='symmetric')
+
+        case 'karhunen-loeve':
+            theta = KL_basis_matrix[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s_l1)
+
+        case 'biorthagonal':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior4.4', level=3, mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_bo_slices(N), output_format='wavedec'), 'bior4.4', mode='symmetric')
+
+        case 'cohen-daubechies-feauveau-5-3':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior2.2', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_cdf53_slices(N), output_format='wavedec'), 'bior2.2', mode='symmetric')
+
+        case 'cohen-daubechies-feauveau-1st-9-7':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior6.8', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _boundary_safe_cdf971_reconstruct(s_l1, N)
+
+        case 'cohen-daubechies-feauveau-2nd-9-7':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior3.5', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _boundary_safe_cdf972_reconstruct(s_l1, N)
+
+        case 'improved-hadamard':
+            theta = _hadamard_forward_with_edge_handling(P,N)
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _hadamard_inverse_with_edge_handling(s_l1, N)
+
+        case 'morlet':
+            theta = _morlet_forward(P,N)
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            return _morlet_inverse(s_l1,N)
+    return np.zeros(N)
+
+
 def _get_haar_slices(n):
     max_level = pywt.dwt_max_level(data_len=n, filter_len=9)
     coeffs = pywt.wavedec(np.zeros(n), 'haar', level=max_level, mode='symmetric')
@@ -268,10 +418,9 @@ def _morlet_inverse(s, n):
 Data structures, global variables & useful functions
 '''
 
-VALID_PATTERNS = ['xy', 'yx', 'zigzag', 'theta', 'snake_square', 'snake_square_inv']
-
-_TLC = np.sqrt(2) 
-_TLC_SM = 0.95
+theta_R_coeff = np.sqrt(2)
+theta_R_dens = np.sqrt(2)
+theta_Theta_dens = np.sqrt(2)
 
 BASIS_ALIASES = {
         'dct' : 'discrete-cosine',
@@ -305,7 +454,6 @@ ACCEPTED_BASISES = [
         'improved-fourier',
         'morlet',
 ]
-
 
 KL_basis_matrix = PCA(n_components=1024).fit(np.eye(1024)).components_
 
@@ -415,15 +563,22 @@ def multi_csv_header(path):
         n += 1
     return n, header, data
 
+def csv_save(path:str, data:np.ndarray, header:str):
+    if data.dtype in (np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64):
+        data = data.astype(np.uint8)
+        np.savetxt(path, data, fmt='%d', delimiter=',', header=header)
+    else:
+        np.savetxt(path, data, fmt='%f', delimiter=',', header=header)
+
 def infer_length(header):
     header = header.split()
     fmat = header[0]
     w, h = int(header[1]), int(header[2])
-    if fmat != 'theta':
-        return w*h
-    else:
-        R = (w/2.) * _TLC
-        return int(np.pi * np.pow(R, 2) / _TLC_SM)
+    if fmat not in PATH_FUNCS.keys():
+        print(f'Error; {fmat} not valid path function')
+        exit(-1023)
+    grid,squid = PATH_FUNCS[fmat](w, h)
+    return squid.shape[0]
 
 def image_shape_props(image):
     if len(image.shape) == 3:
@@ -461,34 +616,62 @@ def get_filetype_path(path):
         return ''
     return tmp[-1]
 
-# create theta conversion grids (xy->t) and (t->xy)
-def theta_convert(radius):
-    # 2 pi r steps (rounded) per radius, radius * 1.5 steps outwards
-    # so effectively pi (r*1.5)^2
-    # call it pi r*1.6^2, and only take the N steps
+def squid_restrict(squid, w, h):
+    squid = np.transpose(squid)
+    p = np.where(np.logical_and(
+        np.logical_and(squid[0] >= 0, squid[1] >= 0),
+        np.logical_and(squid[0] < w, squid[1] < h)
+    ))
+    squid = np.transpose(squid)
+    return squid[p, :][0]
 
-    width = int(2*radius)
-    grid = np.zeros((width, width))
-    l = int(np.pi * np.pow(radius * _TLC, 2) / _TLC_SM)
-    squid = np.zeros((l, 2))
+'''
+Path-etch functions. Produces grid and squid.
+'''
 
-    max_R = int(radius * _TLC)
-    N = 0
-    for r in np.arange(0, max_R):
-        max_Th = int(r * np.pi * 2 * (1/_TLC_SM))
-        for theta in np.linspace(0, 2*np.pi, max_Th):
-            X = np.round((np.cos(theta) * r) + radius).astype(int)
-            Y = np.round((np.sin(theta) * r) + radius).astype(int)
-            if X in range(0, width) and Y in range(0, width):
-                grid[Y, X] = N
-                squid[N] = (X, Y)
-            N += 1
+def theta_path(w, h):
+    m_radius = max(w, h)/2
+    total_radius = int(theta_R_coeff * m_radius)
+    mid_w = w / 2.
+    mid_h = h / 2.
+
+    grid = np.ones((w, h)) * -1
+    total_R = int(theta_R_dens * total_radius)
+    R = np.linspace(0, total_radius, total_R)
+    Theta_steps = theta_Theta_dens * np.round(2 * np.pi * R)
+    Theta_steps = Theta_steps.astype(int)
+    N = np.sum(Theta_steps) + 1
+
+
+    squid = np.zeros((N, 2))
+    n = 0
+    for r, dn in zip(R, Theta_steps):
+        if r == 0 or dn == 0:
+            x, y = np.round(mid_w).astype(int), np.round(mid_h).astype(int)
+            squid[n] = [x, y]
+            grid[y, x] = n
+            n += 1
+            continue
+        thetas = np.linspace(0, 2*np.pi, dn)
+        x, y = np.round(mid_w + (np.cos(thetas) * r)), np.round(mid_h + (np.sin(thetas) * r))
+        x = x.astype(int)
+        y = y.astype(int)
+        n_space = np.arange(n, n+dn, dtype=int)
+
+        p = np.array([x, y])
+        p = np.where( np.logical_and(np.logical_and(p[0] >= 0, p[1] >= 0), np.logical_and(p[0] < w, p[1] < h)) )
+
+        squid[n_space, 0] = x
+        squid[n_space, 1] = y
+        grid[y[p], x[p]] = n_space[p]
+
+        n += dn
+    
     squid = np.array(squid)
     squid = squid.astype(int)
     grid = grid.astype(int)
     return grid, squid
 
-# create outer snake square path grids (xy->t) and (t->xy)
 def snake_square_path(w, h):
     N = w * h
     grid = np.zeros((w, h), dtype=int)
@@ -533,7 +716,6 @@ def snake_square_path(w, h):
     grid = grid.astype(int)
     return grid, squid
 
-# creates an inverted version of the snake_square_path
 def snake_inv_square_path(w, h):
     N = w * h
     grid, squid = snake_square_path(w, h)
@@ -541,154 +723,24 @@ def snake_inv_square_path(w, h):
     squid = np.flip(squid, axis=0)
     return grid, squid
 
-# TODO
-def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
-    '''
-    Runs a reconstructive algorithm for sampled data Y with positions P, and signal length N, with a given basis defined by the basis attribute. Returns the reconstructed signal.
-    '''
+def xy_path(w, h):
+    N = w * h
+    series = np.arange(N)
+    grid = np.reshape(series, (w, h))
+    x = np.ravel(np.argsort(grid))
+    y = np.ravel(np.transpose(np.argsort(np.transpose(grid))))
+    squid = np.array([x, y])
+    if squid.shape[0] == 2:
+        squid = np.transpose(squid)
 
-    # MODIFICATION:
-    # Add the basis name to ACCEPTED_BASISES. Can optionally add aliases (shortcuts) in the BASIS_ALIASES dict.
-    # (Both of these structures are above)
-    # Then add a case to the match statement below for your basis string and implement it there.
+    return grid, squid
 
-    if basis in BASIS_ALIASES:
-        basis = BASIS_ALIASES[basis]
-
-    if basis not in ACCEPTED_BASISES:
-        return None
-
-    match basis:
-        case 'discrete-cosine':
-            theta = dct(np.eye(N, N))[P,:]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return np.real(idct(s_l1.value))
-        case 'fourier-transform':
-            theta = dft(N)[P,:]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return np.real(np.flip(ifft(s_l1.value)))
-        case 'hadamard':
-            theta = (hadamard(N) / np.sqrt(N))[P, :]
-            
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return np.dot(hadamard(N) / np.sqrt(N), s_l1.value)
-
-        case 'haar':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row,'haar', level=3, mode='symmetric'))[0] for row in np.eye(N,N)])[P,:],
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_haar_slices(N), output_format='wavedec'),'haar', mode = 'symmetric')
-
-        case 'daubechies':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'db4', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_db_slices(N), output_format='wavedec'), 'db4', mode='symmetric')
-
-        case 'karhunen-loeve':
-            theta = KL_basis_matrix[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s_l1)
-
-        case 'biorthagonal':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior4.4', level=3, mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_bo_slices(N), output_format='wavedec'), 'bior4.4', mode='symmetric')
-
-        case 'cohen-daubechies-feauveau-5-3':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior2.2', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_cdf53_slices(N), output_format='wavedec'), 'bior2.2', mode='symmetric')
-
-        case 'cohen-daubechies-feauveau-1st-9-7':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior6.8', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return _boundary_safe_cdf971_reconstruct(s_l1, N)
-
-        case 'cohen-daubechies-feauveau-2nd-9-7':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior3.5', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return _boundary_safe_cdf972_reconstruct(s_l1, N)
-
-        case 'improved-hadamard':
-            theta = _hadamard_forward_with_edge_handling(P,N)
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return _hadamard_inverse_with_edge_handling(s_l1, N)
-
-        case 'morlet':
-            theta = _morlet_forward(P,N)
-
-            s_l1 = cp.Variable(theta.shape[1], complex=True)
-            obj = cp.Minimize(cp.norm(s_l1, 1))
-            cons = [theta @ s_l1 == np.conjugate(Y)]
-            problem = cp.Problem(obj, cons)
-            problem.solve(verbose=verbose)
-
-            return _morlet_inverse(s_l1,N)
-    return np.zeros(N)
+PATH_FUNCS = {
+    'theta' : theta_path,
+    'snake_square' : snake_square_path,
+    'snake_square_inv' : snake_inv_square_path,
+    'xy' : xy_path
+}
 
 '''
 Command-line parsing functions
@@ -1082,55 +1134,20 @@ def vector(args, pipe:bool = False, inp:any = None):
     if PATTERN is None:
         PATTERN = 'xy'
 
-    if PATTERN not in VALID_PATTERNS:
+    if PATTERN not in PATH_FUNCS.keys():
         print(f'Pattern given {PATTERN} is not valid.')
         return ltret(-3, pipe)
 
-    header = ''
-    out = []
-    match PATTERN:
-        case 'xy':
-            w, h, c = image.shape
-            n = w*h
-            out = np.reshape(image, (n, c))
-            header = f'xy {w} {h}'
-        case 'yx':
-            w, h, c = image.shape
-            image = np.transpose(image, axes=(1, 0, 2))
-            n = w*h
-            out = np.reshape(image, (n, c))
-            header = f'yx {w} {h}'
-        case 'zigzag':
-            pass
-        case 'theta':
-            w, h, c = image.shape
-            if w != h:
-                print(f'Error! Theta operation requires square image. dimensions {w}, {h}')
-                return ltret(-5, pipe)
-            radius = w/2.0
-            grid, squid = theta_convert(radius)
-
-            x, y = squid[:,0], squid[:, 1]
-            out = image[y, x]
-            header = f'theta {w} {h}'
-        case 'snake_square':
-            w, h, c = image_shape_props(image)
-
-            grid, squid = snake_square_path(w, h)
-            x, y = squid[:,0], squid[:, 1]
-            out = image[y, x]
-            header = f'snake_square {w} {h}'
-        case 'snake_square_inv':
-            w, h, c = image_shape_props(image)
-
-            grid, squid = snake_inv_square_path(w, h)
-            x, y = squid[:,0], squid[:, 1]
-            out = image[y, x]
-            header = f'snake_square_inv {w} {h}'
-            
+    w, h, c = image_shape_props(image)     
+    grid, squid = PATH_FUNCS[PATTERN](w, h)
+    squid = squid_restrict(squid, w, h)     
+    x, y = squid[:,0], squid[:,1]
+    out = image[y, x]
+    header = f'{PATTERN} {w} {h}'  
 
     if not SEPARATE:
-        np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
+        # np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
+        csv_save(OUT_PATH, out, header)
         if pipe:
             return ltret(0, payload=(OUT_PATH, [f'# {header}', out]))
     else:
@@ -1138,14 +1155,14 @@ def vector(args, pipe:bool = False, inp:any = None):
         columns = out.shape[1]
         while n < columns:
             data = out[:,n]
-            np.savetxt(OUT_PATH.format(n), data, fmt='%f', delimiter=',', header=header)
+            # np.savetxt(OUT_PATH.format(n), data, fmt='%f', delimiter=',', header=header)
+            csv_save(OUT_PATH.format(n), data, header)
             n += 1
         if pipe:
             return ltret(0, payload=(RAW_OUT_PATH, [f'# {header}', out]))
     
     return ltret(0, pipe)
 
-# TODO implement the other vectorize methods, multiple data (up to 4 channels RGBA)
 # PIPE FORMAT: image
 # INPUT PIPE: header, data
 # INPUT PIPE: header, [data]
@@ -1232,87 +1249,30 @@ def devector(args, pipe:bool = False, inp:any = None):
     format_type = header[0]
     image = None
 
-    match format_type:
-        case 'xy':
-            x = int(header[1])
-            y = int(header[2])
-            if not MULTI_DATA:
-                c = data.shape[1]
-                image = np.reshape(data, (x, y, c))
-            else:
-                image = np.zeros((x, y, len(data)))
-                n = 0
-                for vector in data:
-                    channel = np.reshape(vector, (x, y))
-                    image[:,:,n] = channel
-                    n += 1
-        case 'yx':
-            x = int(header[1])
-            y = int(header[2])
-            if not MULTI_DATA:
-                c = data.shape[1]
-                image = np.reshape(data, (y, x, c))
-                image = np.transpose(image, axes=(1, 0, 2))
-            else:
-                image = np.zeros(x, y, len(data))
-                n = 0
-                for vector in data:
-                    channel = np.reshape(vector, (y, x, 1))
-                    channel = np.transpose(channel, axes=(1, 0, 2))
-                    image[:,:,n] = channel
-                    n += 1
-        case 'theta':
-            x = int(header[1])
-            y = int(header[2])
-            rad = x/2.
-            grid, squid = theta_convert(rad)
+    if format_type not in PATH_FUNCS.keys():
+        print(f'ERROR: {format_type} not recognized path function!')
+        return ltret(-1023, pipe)
 
-            x_addr, y_addr = squid[:,0], squid[:, 1]
-            if MULTI_DATA:
-                image = np.zeros((x, y, len(data)))
-                for n in range(len(data)):
-                    image[y_addr, x_addr, n] = data[n]
-            else:
-                if len(data.shape) == 2:
-                    c = data.shape[1]
-                else:
-                    c = 1
-                image = np.zeros((x, y, c))
-                image[y_addr, x_addr] = data
-        case 'snake_square':
-            w = int(header[1])
-            h = int(header[2])
-
-            grid, squid = snake_square_path(w, h)
-            x_addr, y_addr = squid[:,0], squid[:, 1]
-            if MULTI_DATA:
-                image = np.zeros((w, h, len(data)))
-                for n in range(len(data)):
-                    image[y_addr, x_addr, n] = data[n]
-            else:
-                if len(data.shape) == 2:
-                    c = data.shape[1]
-                else:
-                    c = 1
-                image = np.zeros((w, h, c))
-                image[y_addr, x_addr] = data
-        case 'snake_square_inv':
-            w = int(header[1])
-            h = int(header[2])
-
-            grid, squid = snake_inv_square_path(w, h)
-            x_addr, y_addr = squid[:,0], squid[:, 1]
-            if MULTI_DATA:
-                image = np.zeros((w, h, len(data)))
-                for n in range(len(data)):
-                    image[y_addr, x_addr, n] = data[n]
-            else:
-                if len(data.shape) == 2:
-                    c = data.shape[1]
-                else:
-                    c = 1
-                image = np.zeros((w, h, c))
-                image[y_addr, x_addr] = data
+    w = int(header[1])
+    h = int(header[2])
+    grid, squid = PATH_FUNCS[format_type](w, h)
+    squid = squid_restrict(squid, w, h)
+    x, y = squid[:,0], squid[:,1]
+    print(data.shape)
+    print(squid.shape)
+    if MULTI_DATA:
+        image = np.zeros((w, h, len(data)))
+        for n in range(len(data)):
+            image[y, x, n] = data[n]
+    else:
+        if len(data.shape) == 2:
+            c = data.shape[1]
+        else:
+            c = 1
+        image = np.zeros((w, h, c))
+        print(image.shape)
+        print(data[grid[y, x]].shape)
+        image[y, x, 0] = data[grid[y, x]]
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
