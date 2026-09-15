@@ -9,7 +9,7 @@ from scipy.ndimage import zoom
 import cvxpy as cp
 from enum import Enum
 from numba import jit
-# import pywt
+import pywt
 from sklearn.decomposition import PCA
 
 '''
@@ -773,6 +773,8 @@ arguments:
         Supported transformation bases (aliases):
 {basises}
 
+    -ns, --no-save
+        Disables saving of output to disk.
 ''')
         return ltret(0, pipe)
 
@@ -780,6 +782,7 @@ arguments:
     IN_PATH = []
     OUT_PATH = None
     VERBOSE = False
+    NO_SAVE = False
 
     idx = 0
     while idx < len(args):
@@ -792,6 +795,8 @@ arguments:
             BASIS = args[idx]
         elif arg in ('-v', '--verbose'):
             VERBOSE = True
+        elif arg in ('-ns', '--no-save'):
+            NO_SAVE = True
         else:
             IN_PATH.append(arg)
         idx += 1
@@ -853,15 +858,15 @@ arguments:
             print(f'CVX didn\'t work! Likely a bad basis specification...')
             return ltret(-2, pipe)
         X.append(tmp)
-        np.savetxt(f'{OUT_PATH}X{n}.csv', tmp, fmt='%f', delimiter=',', header=header)
+        if not NO_SAVE:
+            np.savetxt(f'{OUT_PATH}X{n}.csv', tmp, fmt='%f', delimiter=',', header=header)
         n += 1
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, [header, X]))
 
     return ltret(0, pipe)
-
-    
+   
 # PIPE FORMAT: header, P, [Yn]
 # INPUT PIPE: header, data
 # INPUT PIPE: image
@@ -885,6 +890,9 @@ arguments:
     -m, --mask (path)
         specifies the path to a sample mask from which the samples will be taken.
         sample mask should be an all-or-none vector of the same length as the input vector
+    
+    -ns, --no-save
+        Disables saving of output to disk.
 ''')
         return ltret(0, pipe)
     IN_PATH = None
@@ -892,6 +900,7 @@ arguments:
     PERCENT = None
     MASK_PATH = None
     IS_IMAGE_SAMPLE = False
+    NO_SAVE = False
 
     idx = 0
     while idx < len(args):
@@ -902,6 +911,8 @@ arguments:
         elif arg in ('-m', '--mask'):
             idx += 1
             MASK_PATH = args[idx]
+        elif arg in ('-ns', '--no-save'):
+            NO_SAVE = True
         else:
             if arg.endswith("%"):
                 PERCENT = float(arg[:-1]) / 100.
@@ -979,7 +990,8 @@ arguments:
         sample_mask = sample_mask.astype(np.uint8)
         w, h = data.shape[0], data.shape[1]
         sample_mask_image = np.reshape(sample_mask, (w, h, 3))
-        plt.imsave(OUT_PATH, sample_mask_image)
+        if not NO_SAVE:
+            plt.imsave(OUT_PATH, sample_mask_image)
         if pipe:
             return ltret(0, payload=(OUT_PATH, sample_mask_image))
     else:
@@ -988,17 +1000,16 @@ arguments:
             temp = data[P, channel]
             Y.append(np.array(temp))
 
-        np.savetxt(f'{OUT_PATH}P.csv', P, fmt='%d', delimiter=',', header=header)
-        for n in range(channels):
-            np.savetxt(f'{OUT_PATH}Y{n}.csv', Y[n], fmt='%f', delimiter=',\t', header=header)
+        if not NO_SAVE:
+            np.savetxt(f'{OUT_PATH}P.csv', P, fmt='%d', delimiter=',', header=header)
+            for n in range(channels):
+                np.savetxt(f'{OUT_PATH}Y{n}.csv', Y[n], fmt='%f', delimiter=',\t', header=header)
 
         if pipe:
             return ltret(0, payload=(OUT_PATH, (header, P, Y)))
     
     return ltret(0, pipe)
 
-# SEMICOMPLETE
-# TODO implement other vectorize methods
 # PIPE FORMAT: header, data
 # INPUT PIPE: image
 def vector(args, pipe:bool = False, inp:any = None):
@@ -1022,28 +1033,20 @@ def vector(args, pipe:bool = False, inp:any = None):
             specifies the type of pattern to be used for vectorizing. valid patterns are shown below. note that 'theta' will only work if the given image is square!
             defaults to 'xy'
             patterns: 
-                {VALID_PATTERNS}
-        
-        -r, --resize (w=(integer)|h=(integer))
-            resizes the image before vectorizing such that either the X axis is the given width, or the Y axis is the given height
-    
-        -c, --crop
-            takes the central crop of the image (prior to resizing), ensuring the image is square. 
+                {',\n'.join(PATH_FUNCS.keys())}
 
-        -n, --normalise
-            normalises the image to a range (0, 1) if it is integer-typed (in a range 0-255).
-
+        -n, --no-save
+            Disables saving of files to disk.
+                
         -s, --separate
             separates contents of a multi-channel image into individual channeled images. output filename should have a * to denote where the number should go if featured.
     ''')
         return ltret(0, pipe)
     IN_PATH = None
     OUT_PATH = None
-    DO_RESIZE = None # can be a tuple with either first or second parameter being a positive integer to scale down to.
-    DO_CROP = False
     PATTERN = 'xy'
-    NORMALISE = False
     SEPARATE = False
+    NO_SAVE = False
 
     idx = 0
     while idx < len(args):
@@ -1054,28 +1057,10 @@ def vector(args, pipe:bool = False, inp:any = None):
         elif arg in ('-p', '--pattern'):
             idx += 1
             PATTERN = args[idx]
-        elif arg in ('-n', '--normalise'):
-            NORMALISE = True
         elif arg in ('-s', '--separate'):
             SEPARATE = True
-        elif arg in ('-r', '--resize'):
-            idx += 1
-            tmp = args[idx].split('=')
-            if len(tmp) != 2:
-                print(f'Wrong format of resize parameter. ({args[idx]})')
-                return ltret(-1, pipe)
-            elif tmp[0] not in ('w', 'h'):
-                print(f'First part of resize parameter must be "w" or "h". ({args[idx]})')
-                return ltret(-1, pipe)
-
-            v = int(tmp[1])
-            if tmp[0] == 'w':
-                DO_RESIZE = (v, None)
-            else:
-                DO_RESIZE = (None, v)
-
-        elif arg in ('-c', '--crop'):
-            DO_CROP = True
+        elif arg in ('-ns', '--no-save'):
+            NO_SAVE = True
         else:
             IN_PATH = arg
 
@@ -1108,29 +1093,6 @@ def vector(args, pipe:bool = False, inp:any = None):
             return ltret(-1, pipe)
         OUT_PATH = OUT_PATH.replace('*', '{0}')
 
-    if DO_CROP:
-        image = square_crop(image)
-
-    if DO_RESIZE != None:
-        factor = 1
-        if DO_RESIZE[0] == None:
-            # resize on H
-            H = DO_RESIZE[1]
-            h = image.shape[1]
-            factor = H / h
-        else:
-            # resize on W
-            W = DO_RESIZE[0]
-            w = image.shape[1]
-            factor = W / w
-
-        image = zoom(image, (factor, factor, 1))
-
-    if NORMALISE:
-        ALLOWED_DATATYPES = [np.float32, np.float16, np.float64, np.floating]
-        if type(min) not in ALLOWED_DATATYPES and type(max) not in ALLOWED_DATATYPES:
-            image = image / 255.0
-
     if PATTERN is None:
         PATTERN = 'xy'
 
@@ -1147,7 +1109,8 @@ def vector(args, pipe:bool = False, inp:any = None):
 
     if not SEPARATE:
         # np.savetxt(OUT_PATH, out, fmt='%f', delimiter=',\t', header=header)
-        csv_save(OUT_PATH, out, header)
+        if not NO_SAVE:
+            csv_save(OUT_PATH, out, header)
         if pipe:
             return ltret(0, payload=(OUT_PATH, [f'# {header}', out]))
     else:
@@ -1156,7 +1119,8 @@ def vector(args, pipe:bool = False, inp:any = None):
         while n < columns:
             data = out[:,n]
             # np.savetxt(OUT_PATH.format(n), data, fmt='%f', delimiter=',', header=header)
-            csv_save(OUT_PATH.format(n), data, header)
+            if not NO_SAVE:
+                csv_save(OUT_PATH.format(n), data, header)
             n += 1
         if pipe:
             return ltret(0, payload=(RAW_OUT_PATH, [f'# {header}', out]))
@@ -1183,11 +1147,15 @@ def devector(args, pipe:bool = False, inp:any = None):
     arguments:
         -o, --out (path)
             specifies the save path for the output image. Defaults to a .png rendition of the given input.
+        
+        -ns, --no-save
+            Disables saving of output to disk.
     ''')
         return ltret(0, pipe)
 
     IN_PATH = None
     OUT_PATH = None
+    NO_SAVE = False
 
     idx = 0
     while idx < len(args):
@@ -1196,6 +1164,8 @@ def devector(args, pipe:bool = False, inp:any = None):
         if arg in ('-o', '--out'):
             idx += 1
             OUT_PATH = args[idx]
+        elif arg in ('-ns', '--no-save'):
+            NO_SAVE = True
         else:
             IN_PATH = args[idx]
         idx += 1
@@ -1279,7 +1249,9 @@ def devector(args, pipe:bool = False, inp:any = None):
 
     if is_intlike_image(image):
         image = image.astype(np.uint8)
-    plt.imsave(OUT_PATH, image)
+    
+    if not NO_SAVE:
+        plt.imsave(OUT_PATH, image)
     if pipe:
         return ltret(0, payload=(OUT_PATH, image))
 
@@ -1355,6 +1327,145 @@ def monochrome(args, pipe:bool = False, inp:any = None):
         return ltret(0, payload=(OUT_PATH, outimg))
     return ltret(0, pipe)
 
+# PIPE FORMAT: image
+# INPUT PIPE: image
+def prepare(args, pipe:bool = False, inp:any = None):
+    if type(args) == str:
+        args = args.split()
+        
+    if len(args) == 0 and inp == None:
+        print('''
+    cspy prep
+    Prepares an image, doing some initial image processing
+
+    usage:
+        py cspy.py prep (path/to/some/image) (options)
+    
+    arguments:
+        -o, --out (path)
+            specifies the save path for the output image. Defaults to a suffixed '_mono' rendition of the given input.
+        
+        -r, --resize (w=...|h=...)
+            Scales the image to the set width or height value. 
+
+        -c, --crop
+            Takes a central crop of the image
+
+        -m, --mono
+            Grayscales the image. Useful for piping.
+        
+        -n, --normalise
+            Normalises the color (float range between 0, 1)
+        
+        -ns, --no-save
+            Disables saving of files to disk. Saving turned on by default.
+    ''')
+        return ltret(0, pipe)
+    
+    IN_PATH = None
+    OUT_PATH = None
+    DO_RESIZE = None # can be a tuple with either first or second parameter being a positive integer to scale down to.
+    DO_CROP = False
+    NORMALISE = False
+    NO_SAVE = False
+    MONO = False
+
+    idx = 0
+    while idx < len(args):
+        arg = args[idx].lower()
+        if arg in ('-o', '--out'):
+            idx += 1
+            OUT_PATH = args[idx]
+        elif arg in ('-n', '--normalise'):
+            NORMALISE = True
+        elif arg in ('-ns', '--no-save'):
+            NO_SAVE = True
+        elif arg in ('-m', '--mono'):
+            MONO = True
+        elif arg in ('-r', '--resize'):
+            idx += 1
+            tmp = args[idx].split('=')
+            if len(tmp) != 2:
+                print(f'Wrong format of resize parameter. ({args[idx]})')
+                return ltret(-1, pipe)
+            elif tmp[0] not in ('w', 'h'):
+                print(f'First part of resize parameter must be "w" or "h". ({args[idx]})')
+                return ltret(-1, pipe)
+
+            v = int(tmp[1])
+            if tmp[0] == 'w':
+                DO_RESIZE = (v, None)
+            else:
+                DO_RESIZE = (None, v)
+        elif arg in ('-c', '--crop'):
+            DO_CROP = True
+        else:
+            IN_PATH = arg
+
+        idx += 1
+
+    if IN_PATH == None:
+        if inp != None:
+            IN_PATH = inp[0]
+            image = inp[1]
+        else:
+            print(f'No input given!')
+            return ltret(-2, pipe)
+    else:
+        image = plt.imread(IN_PATH)
+
+    MONO_IMAGE = len(image.shape) == 2
+    if MONO_IMAGE:
+        image = np.reshape(image, (image.shape[0], image.shape[1], 1))
+    RAW_OUT_PATH = OUT_PATH
+
+    if OUT_PATH == None:
+        OUT_PATH = remove_filetype_path(IN_PATH) + '_prepared.' + get_filetype_path(IN_PATH)
+
+    if DO_CROP:
+        image = square_crop(image)
+
+    if DO_RESIZE != None:
+        factor = 1
+        if DO_RESIZE[0] == None:
+            # resize on H
+            H = DO_RESIZE[1]
+            h = image.shape[1]
+            factor = H / h
+        else:
+            # resize on W
+            W = DO_RESIZE[0]
+            w = image.shape[1]
+            factor = W / w
+
+        image = zoom(image, (factor, factor, 1))
+
+    if NORMALISE:
+        if image.dtype == np.uint8:
+            image = image.astype(np.float32)
+            image = image / 255.0
+
+    if MONO:
+        r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
+        pretype = image.dtype
+        
+        image = np.sqrt(np.pow(r, 2) + np.pow(g, 2) + np.pow(b, 2))
+
+        if pretype == np.uint8:
+            image = image / np.sqrt(np.pow(255, 2)*3)
+            image = image.astype(np.uint8)
+
+    if not NO_SAVE:
+        if MONO:
+            plt.imsave(OUT_PATH, image, cmap='gray')
+        else:
+            plt.imsave(OUT_PATH, image)
+
+    if pipe:
+        return ltret(0, payload=(OUT_PATH, image))
+    return ltret(0, pipe)
+
+
 def cspy_engine(args, pipe:bool=False, inp:any = None, print_cli:bool = False):
     if type(args) == str:
         args = args.split()
@@ -1365,12 +1476,7 @@ cspy
 An implementation of a compressed sensing suite in Python.
 
 usage:
-    py cspy.py (suite|vector|sample|reconstruct|devector|monochrome|help) ...
-
-suite:
-    Runs a test suite compressed sensing reconstruction on an image. Allows selection of various sampling patterns, sampling percentages, image resizing, algorithms, and so on.
-    Accepts images of arbitrary color channel count and arbitrary sizes, but can be resized down as specified. 
-    If a reconstruction fails and logs were created, can be specified to resume from a given log path.
+    py cspy.py (prep|vector|sample|reconstruct|devector) ...
 
 vector:
     Vectorizes a 2D image into a 1D signal. CSV signal files require the type of signal to be stored as a header comment.
@@ -1385,11 +1491,11 @@ reconstruct:
 devector:
     Converts CSV vector files back into image files.
 
-monochrome:
-    Converts a RGB image into a monochromatic (grayscale) image.
+prep:
+    Prepares an image by pre-processing - downscaling, croppping, converting into monochrome, etc.
     
 ''')
-        return
+        return ltret(-1, pipe)
 
     big_argstring = ' '.join(args)
     argstrings = big_argstring.split(',')
@@ -1421,8 +1527,8 @@ monochrome:
                         return code
                 case 'help':
                     pass
-                case 'monochrome':
-                    code, prior_state = monochrome(args[1:], pipe=True, inp=prior_state)
+                case 'prep':
+                    code, prior_state = prepare(args[1:], pipe=True, inp=prior_state)
                     if code != 0:
                         return code
                 case _:
@@ -1444,8 +1550,8 @@ monochrome:
             return vector(args[1:], pipe, inp)
         elif mode == 'devector':
             return devector(args[1:], pipe, inp)
-        elif mode == 'monochrome':
-            return monochrome(args[1:], pipe, inp)
+        elif mode == 'prep':
+            return prepare(args[1:], pipe, inp)
         else:
             if print_cli:
                 print(f'Unrecognized mode {mode}')
