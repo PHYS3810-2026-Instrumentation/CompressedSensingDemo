@@ -43,6 +43,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem.solve(verbose=verbose)
 
             return np.real(idct(s_l1.value))
+
         case 'fourier-transform':
             theta = dft(N)[P,:]
 
@@ -53,6 +54,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem.solve(verbose=verbose)
 
             return np.real(np.flip(ifft(s_l1.value)))
+
         case 'hadamard':
             theta = (hadamard(N) / np.sqrt(N))[P, :]
             
@@ -62,10 +64,11 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return np.dot(hadamard(N) / np.sqrt(N), s_l1.value)
+            return np.real(np.dot(hadamard(N) / np.sqrt(N), s_l1.value))
 
         case 'haar':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row,'haar', level=3, mode='symmetric'))[0] for row in np.eye(N,N)])[P,:],
+            max_level = pywt.dwt_max_level(data_len=N, filter_len=9)
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row,'haar', level=max_level, mode='symmetric'))[0] for row in np.eye(N,N)])[P,:]
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -84,10 +87,10 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_db_slices(N), output_format='wavedec'), 'db4', mode='symmetric')
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_db_slices(N), output_format='wavedec'), 'db4', mode='symmetric')
 
         case 'karhunen-loeve':
-            theta = KL_basis_matrix[P, :]
+            theta = _KL_make_basis(N).T[P, :]
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -95,10 +98,12 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s_l1)
+            s = np.real(s_l1.value)
+
+            return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s)
 
         case 'biorthagonal':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior4.4', level=3, mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedecn(row, 'bior4.4', level=3, mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -106,7 +111,11 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_bo_slices(N), output_format='wavedec'), 'bior4.4', mode='symmetric')
+            s = np.real(s_l1.value)
+
+            tmp = pywt.array_to_coeffs(s, _get_bo_slices(N), output_format='wavedec')
+            # print(f'{N}, {s.shape}')
+            return pywt.waverec(tmp, 'bior4.4', mode='symmetric')
 
         case 'cohen-daubechies-feauveau-5-3':
             theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior2.2', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
@@ -117,10 +126,11 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1), _get_cdf53_slices(N), output_format='wavedec'), 'bior2.2', mode='symmetric')
+            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_cdf53_slices(N), output_format='wavedec'), 'bior2.2', mode='symmetric')
 
         case 'cohen-daubechies-feauveau-1st-9-7':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior6.8', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+            max_level = pywt.dwt_max_level(data_len=N, filter_len=9)
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior6.8', level=max_level, mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -128,7 +138,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return _boundary_safe_cdf971_reconstruct(s_l1, N)
+            return _boundary_safe_cdf971_reconstruct(s_l1.value, N)
 
         case 'cohen-daubechies-feauveau-2nd-9-7':
             theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior3.5', level=pywt.dwt_max_level(data_len=N, filter_len=9), mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
@@ -139,7 +149,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return _boundary_safe_cdf972_reconstruct(s_l1, N)
+            return _boundary_safe_cdf972_reconstruct(s_l1.value, N)
 
         case 'improved-hadamard':
             theta = _hadamard_forward_with_edge_handling(P,N)
@@ -150,7 +160,22 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return _hadamard_inverse_with_edge_handling(s_l1, N)
+            s = np.real(s_l1.value)
+
+            return _hadamard_inverse_with_edge_handling(s, N)
+
+        case 'improved-fourier':
+            theta = _fourier_forward_smooth_edges(P, N)
+            print(theta.shape)
+
+            s_l1 = cp.Variable(theta.shape[1], complex=True)
+            obj = cp.Minimize(cp.norm(s_l1, 1))
+            cons = [theta @ s_l1 == np.conjugate(Y)]
+            problem = cp.Problem(obj, cons)
+            problem.solve(verbose=verbose)
+
+            s = np.real(s_l1.value)
+            return _fourier_inverse_smooth_edges(s, N)
 
         case 'morlet':
             theta = _morlet_forward(P,N)
@@ -161,7 +186,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return _morlet_inverse(s_l1,N)
+            return _morlet_inverse(s_l1.value, N)
     return np.zeros(N)
 
 
@@ -291,7 +316,7 @@ def _hadamard_inverse_with_edge_handling(s, n):
     if len(recon) > 4:
         recon[0] = (recon[0] + recon[1]) / 2
         recon[-1] = (recon[-1] + recon[-2]) / 2
-        
+
     return recon
 
 def _fourier_forward_smooth_edges(p, n):
@@ -303,6 +328,7 @@ def _fourier_forward_smooth_edges(p, n):
     identity_row[p] = 1.0
     
     fourier_row = dct(identity_row, norm='ortho')
+    # fourier_row = fft(identity_row)
     
     return fourier_row[np.newaxis, :]
 
@@ -324,6 +350,7 @@ def _fourier_inverse_smooth_edges(s, n):
     
     # Reverse the Fourier mapping
     recon = idct(padded_s, norm='ortho')
+    # recon = ifft(padded_s)
     
     # Edge-blending filter to smooth out blocking artifacts
     if n > 4:
@@ -413,6 +440,9 @@ def _morlet_inverse(s, n):
         
     return recon
 
+def _KL_make_basis(N):
+    return PCA(n_components=N).fit(np.eye(N)).components_
+
 '''
 Data structures, global variables & useful functions
 '''
@@ -434,7 +464,7 @@ BASIS_ALIASES = {
         'cdf971' : 'cohen-daubechies-feauveau-1st-9-7',
         'cdf972' : 'cohen-daubechies-feauveau-2nd-9-7',
         'ihdd' : 'improved-hadamard',
-        'ifft' : 'improved-fourier',
+        # 'ifft' : 'improved-fourier',
         'ml' : 'morlet',
 }
 
@@ -450,7 +480,7 @@ ACCEPTED_BASISES = [
         'cohen-daubechies-feauveau-1st-9-7',
         'cohen-daubechies-feauveau-2nd-9-7',
         'improved-hadamard',
-        'improved-fourier',
+        # 'improved-fourier',
         'morlet',
 ]
 
@@ -852,6 +882,10 @@ arguments:
         print(f'No sample vectors given!')
         return ltret(-2, pipe)
 
+    if BASIS not in ACCEPTED_BASISES and BASIS not in BASIS_ALIASES.keys():
+        print(f'Basis {BASIS} not valid!')
+        return ltret(-3, pipe)
+
     if OUT_PATH == None:
         # print(P_path)
         OUT_PATH = remove_filetype_path(P_path) + 're_'
@@ -876,7 +910,7 @@ arguments:
         if tmp is None or not passed:
             print(f'CVX didn\'t work! Failed at {n} / {len(Y)}. Check the basis code & enable verbosity')
             return ltret(-2, pipe)
-        
+
         tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
         X.append(tmp)
         if not NO_SAVE:
