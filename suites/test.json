@@ -1,0 +1,32 @@
+{
+	"name" : "TestSuite",
+	"folder" : "./suites/testsuite/",
+	"notes" : "Testing of general sample suite process.",
+	
+	"commands" : [
+		[
+			"prep [FILE] --crop --resize w=32 --out [FOLDER]/[FNAME].jpg"
+		]
+	],
+	
+	"files" : [
+		"./testdata/*.jpg"
+	],
+	
+	"patterns" : [
+		"xy",
+		"theta",
+		"snake_square"
+	],
+	
+	"samples" : [
+		10, 25, 50, 75
+	],
+	
+	"bases" : [
+		"discrete-cosine",
+		"fourier",
+		"hadamard",
+		"ihdd"
+	]
+}
