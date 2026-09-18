@@ -16,7 +16,6 @@ from sklearn.decomposition import PCA
 Functions necessary to enable various transform basises
 '''
 
-# TODO
 def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
     '''
     Runs a reconstructive algorithm for sampled data Y with positions P, and signal length N, with a given basis defined by the basis attribute. Returns the reconstructed signal.
@@ -775,6 +774,11 @@ arguments:
 
     -ns, --no-save
         Disables saving of output to disk.
+
+    -s, --start (i)
+        Sets starting at a specific image channel (i.e. 1 to start from Y1)
+
+    -t, --tries (i)
 ''')
         return ltret(0, pipe)
 
@@ -783,6 +787,8 @@ arguments:
     OUT_PATH = None
     VERBOSE = False
     NO_SAVE = False
+    START_I = 0
+    TRIES = 1
 
     idx = 0
     while idx < len(args):
@@ -797,6 +803,12 @@ arguments:
             VERBOSE = True
         elif arg in ('-ns', '--no-save'):
             NO_SAVE = True
+        elif arg in ('-s', '--start'):
+            idx += 1
+            START_I = int(args[idx])
+        elif arg in ('-t', '--tries'):
+            idx += 1
+            TRIES = int(args[idx])
         else:
             IN_PATH.append(arg)
         idx += 1
@@ -849,18 +861,28 @@ arguments:
     X = []
     if type(P) is not list:
         P = P.astype(int)
-    n = 0
-    for Yn in Y:
-        tmp = RECONSTRUCT_DRIVER(Yn, P, N, BASIS, verbose=VERBOSE)
-        tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
+    n = START_I
+    while n < len(Y):
+        Yn = Y[n]
+        passed = False
+        tmp = None
+        for t in range(TRIES):
+            try:
+                tmp = RECONSTRUCT_DRIVER(Yn, P, N, BASIS, verbose=VERBOSE)
+                passed = True
+            except cp.error.SolverError as e:
+                print(f'Caught solver error! {t+1}/{TRIES}\n{e}')
         # print(f'{np.min(tmp)} -> {np.max(tmp)}')
-        if tmp is None:
-            print(f'CVX didn\'t work! Likely a bad basis specification...')
+        if tmp is None or not passed:
+            print(f'CVX didn\'t work! Failed at {n} / {len(Y)}. Check the basis code & enable verbosity')
             return ltret(-2, pipe)
+        
+        tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
         X.append(tmp)
         if not NO_SAVE:
             np.savetxt(f'{OUT_PATH}X{n}.csv', tmp, fmt='%f', delimiter=',', header=header)
         n += 1
+        print(f'{n}/{len(Y)} (L1/N = {np.sum(tmp) /  tmp.shape})')
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, [header, X]))
@@ -1228,12 +1250,11 @@ def devector(args, pipe:bool = False, inp:any = None):
     grid, squid = PATH_FUNCS[format_type](w, h)
     squid = squid_restrict(squid, w, h)
     x, y = squid[:,0], squid[:,1]
-    print(data.shape)
-    print(squid.shape)
+
     if MULTI_DATA:
         image = np.zeros((w, h, len(data)))
         for n in range(len(data)):
-            image[y, x, n] = data[n]
+            image[y, x, n] = data[n][grid[y, x]]
     else:
         if len(data.shape) == 2:
             c = data.shape[1]
