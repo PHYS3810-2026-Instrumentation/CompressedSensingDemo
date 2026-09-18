@@ -75,8 +75,9 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             cons = [theta @ s_l1 == np.conjugate(Y)]
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
+            s = np.real(s_l1.value)
 
-            return pywt.waverec(pywt.array_to_coeffs(np.real(s_l1.value), _get_haar_slices(N), output_format='wavedec'),'haar', mode = 'symmetric')
+            return pywt.waverec(pywt.array_to_coeffs(s, _get_haar_slices(N), output_format='wavedec'),'haar', mode = 'symmetric')
 
         case 'daubechies':
             theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'db4', mode='symmetric'))[0]for row in np.eye(N, N)])[P, :]
@@ -102,8 +103,8 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
 
             return np.dot(PCA(n_components=N).fit(np.eye(N)).components_.T, s)
 
-        case 'biorthagonal':
-            theta = np.array([pywt.coeffs_to_array(pywt.wavedecn(row, 'bior4.4', level=3, mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
+        case 'biorthogonal':
+            theta = np.array([pywt.coeffs_to_array(pywt.wavedec(row, 'bior4.4', level=3, mode='symmetric'))[0] for row in np.eye(N, N)])[P, :]
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -459,7 +460,7 @@ BASIS_ALIASES = {
         'hdd' : 'hadamard',
         'db' : 'daubechies',
         'kl' : 'karhunen-loeve',
-        'bo' : 'biorthagonal',
+        'bo' : 'biorthogonal',
         'cdf53' : 'cohen-daubechies-feauveau-5-3',
         'cdf971' : 'cohen-daubechies-feauveau-1st-9-7',
         'cdf972' : 'cohen-daubechies-feauveau-2nd-9-7',
@@ -475,7 +476,7 @@ ACCEPTED_BASISES = [
         'haar',
         'daubechies',
         'karhunen-loeve',
-        'biorthagonal',
+        'biorthogonal',
         'cohen-daubechies-feauveau-5-3',
         'cohen-daubechies-feauveau-1st-9-7',
         'cohen-daubechies-feauveau-2nd-9-7',
@@ -575,7 +576,7 @@ def csv_header(path):
     header = header.strip('#').strip()
     return header, data
 
-def multi_csv_header(path):
+def multi_csv_header(path, file_precache:dict = None):
     path = path.replace('*', '{0}')
     n = 0
     header = None
@@ -584,10 +585,14 @@ def multi_csv_header(path):
         pathactual = path.format(n)
         if not os.path.exists(pathactual):
             break
+        if file_precache is not None and pathactual in file_precache:
+            th, tmp = file_precache[pathactual]
+        else:
+            th, tmp = csv_header(pathactual)
+
         if header == None:
-            with open(pathactual, mode='r') as fp:
-                header = fp.readline()
-        tmp = np.loadtxt(pathactual, delimiter=',')
+            header = th
+        
         data.append(tmp)
         n += 1
     return n, header, data
@@ -777,7 +782,7 @@ Command-line parsing functions
 
 # PIPE FORMAT: header, [Xn]
 # INPUT PIPE: header, P, [Yn]
-def reconstruct(args, pipe:bool=False, inp:any = None):
+def reconstruct(args, pipe:bool=False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
 
@@ -863,10 +868,13 @@ arguments:
     else:
         for path in IN_PATH:
             if '*' in path:
-                N, _, tmp = multi_csv_header(path)
+                N, _, tmp = multi_csv_header(path, file_precache)
                 Y += tmp
             else:
-                tH, tD = csv_header(path)
+                if file_precache is not None and path in file_precache:
+                    tH, tD = file_precache[path]
+                else:
+                    tH, tD = csv_header(path)
                 if 'P.csv' in path:
                     P_path = path
                     P = tD
@@ -926,7 +934,7 @@ arguments:
 # PIPE FORMAT: header, P, [Yn]
 # INPUT PIPE: header, data
 # INPUT PIPE: image
-def sample(args, pipe:bool=False, inp:any = None):
+def sample(args, pipe:bool=False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
 
@@ -997,11 +1005,17 @@ arguments:
             return ltret(-1, pipe)
     else:
         if IN_PATH.split('.')[-1] in IMAGE_TYPES:
-            data = plt.imread(IN_PATH)
+            if file_precache is not None and IN_PATH in file_precache:
+                data = file_precache[IN_PATH]
+            else:
+                data = plt.imread(IN_PATH)
             header = None
             IS_IMAGE_SAMPLE = True
         else:
-            header, data = csv_header(IN_PATH)
+            if file_precache is not None and IN_PATH in file_precache:
+                header, data = file_precache[IN_PATH]
+            else:
+                header, data = csv_header(IN_PATH)
             IS_IMAGE_SAMPLE = False
 
     if OUT_PATH == None:
@@ -1068,7 +1082,7 @@ arguments:
 
 # PIPE FORMAT: header, data
 # INPUT PIPE: image
-def vector(args, pipe:bool = False, inp:any = None):
+def vector(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
     
@@ -1130,7 +1144,10 @@ def vector(args, pipe:bool = False, inp:any = None):
             print(f'No input given!')
             return ltret(-2, pipe)
     else:
-        image = plt.imread(IN_PATH)
+        if file_precache is not None and IN_PATH in file_precache:
+            image = file_precache[IN_PATH]
+        else:
+            image = plt.imread(IN_PATH)
 
     MONO_IMAGE = len(image.shape) == 2
     if MONO_IMAGE:
@@ -1186,7 +1203,7 @@ def vector(args, pipe:bool = False, inp:any = None):
 # PIPE FORMAT: image
 # INPUT PIPE: header, data
 # INPUT PIPE: header, [data]
-def devector(args, pipe:bool = False, inp:any = None):
+def devector(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
     
@@ -1241,20 +1258,8 @@ def devector(args, pipe:bool = False, inp:any = None):
             return ltret(-1, pipe)
     else:
         if '*' in IN_PATH:
-            formatstr = IN_PATH.replace('*', '{0}')
-            N = 0
             MULTI_DATA = True
-            data = []
-            while True:
-                actualstr = formatstr.format(N)
-                if not os.path.exists(actualstr):
-                    break
-                if N == 0:
-                    with open(actualstr, mode='r') as fp:
-                        header = fp.readline().strip('# ')
-                temp = np.loadtxt(actualstr, delimiter=',')
-                data.append(temp)
-                N += 1
+            header, data = multi_csv_header(IN_PATH, file_precache=file_precache)
             if len(data) == 0:
                 print(f'No files found by format {IN_PATH}')
                 return ltret(-1, pipe)
@@ -1264,9 +1269,10 @@ def devector(args, pipe:bool = False, inp:any = None):
             
             IN_PATH = IN_PATH.replace('*', 'n')
         else:
-            with open(IN_PATH, mode='r') as fp:
-                header = fp.readline().strip('# ')
-            data = np.loadtxt(IN_PATH, delimiter=',')
+            if file_precache is not None and IN_PATH == file_precache:
+                header, data = file_precache[IN_PATH]
+            else:
+                header, data = csv_header(IN_PATH)
 
     if OUT_PATH == None:
         OUT_PATH = remove_filetype_path(IN_PATH) + '_devector.png'
@@ -1314,7 +1320,7 @@ def devector(args, pipe:bool = False, inp:any = None):
 
 # PIPE FORMAT: image
 # INPUT PIPE: image
-def monochrome(args, pipe:bool = False, inp:any = None):
+def monochrome(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
     
@@ -1384,7 +1390,7 @@ def monochrome(args, pipe:bool = False, inp:any = None):
 
 # PIPE FORMAT: image
 # INPUT PIPE: image
-def prepare(args, pipe:bool = False, inp:any = None):
+def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
         
@@ -1467,7 +1473,10 @@ def prepare(args, pipe:bool = False, inp:any = None):
             print(f'No input given!')
             return ltret(-2, pipe)
     else:
-        image = plt.imread(IN_PATH)
+        if file_precache is not None and IN_PATH in file_precache:
+            image = file_precache[IN_PATH]
+        else:
+            image = plt.imread(IN_PATH)
 
     MONO_IMAGE = len(image.shape) == 2
     if MONO_IMAGE:
@@ -1521,7 +1530,7 @@ def prepare(args, pipe:bool = False, inp:any = None):
     return ltret(0, pipe)
 
 
-def cspy_engine(args, pipe:bool=False, inp:any = None, print_cli:bool = False):
+def cspy_engine(args, pipe:bool=False, inp:any = None, print_cli:bool = False, file_precache:dict = None):
     if type(args) == str:
         args = args.split()
 
@@ -1554,10 +1563,8 @@ prep:
 
     big_argstring = ' '.join(args)
     argstrings = big_argstring.split(',')
-    if len(argstrings) > 1:
+    if len(argstrings) >= 1:
         prior_state = inp
-        if print_cli:
-            print(f'Executing pipeline...')
 
         for args in argstrings:
             args = args.split()
@@ -1565,25 +1572,23 @@ prep:
 
             match mode:
                 case 'sample':
-                    code, prior_state = sample(args[1:], pipe=True, inp=prior_state)
+                    code, prior_state = sample(args[1:], pipe=True, inp=prior_state, file_precache=file_precache)
                     if code != 0:
                         return code
                 case 'vector':
-                    code, prior_state = vector(args[1:], pipe=True, inp=prior_state)
+                    code, prior_state = vector(args[1:], pipe=True, inp=prior_state, file_precache=file_precache)
                     if code != 0:
                         return code
                 case 'devector':
-                    code, prior_state = devector(args[1:], pipe=True, inp=prior_state)
+                    code, prior_state = devector(args[1:], pipe=True, inp=prior_state, file_precache=file_precache)
                     if code != 0:
                         return code
                 case 'reconstruct':
-                    code, prior_state = reconstruct(args[1:], pipe=True, inp=prior_state)
+                    code, prior_state = reconstruct(args[1:], pipe=True, inp=prior_state, file_precache=file_precache)
                     if code != 0:
                         return code
-                case 'help':
-                    pass
                 case 'prep':
-                    code, prior_state = prepare(args[1:], pipe=True, inp=prior_state)
+                    code, prior_state = prepare(args[1:], pipe=True, inp=prior_state, file_precache=file_precache)
                     if code != 0:
                         return code
                 case _:
