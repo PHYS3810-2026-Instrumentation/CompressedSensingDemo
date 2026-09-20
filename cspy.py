@@ -1470,8 +1470,8 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
             IN_PATH = inp[0]
             image = inp[1]
         else:
-            print(f'No input given!')
-            return ltret(-2, pipe)
+            IN_PATH = f'./blank'
+            image = np.ones((256, 256, 3))
     else:
         if file_precache is not None and IN_PATH in file_precache:
             image = file_precache[IN_PATH]
