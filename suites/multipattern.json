@@ -8,12 +8,17 @@
 			"prep --crop --resize w=32 --no-save --mono",
 			"sample [SAMPLE]% --out [FOLDER]/.sample[SAMPLE].png"
 		],
+
 		[
 			"vector [FOLDER]/.sample[SAMPLE].png --pattern [PATTERN] --out [FOLDER]/.sample[SAMPLE]_[PATTERN].csv"
 		],
+
 		[
-			"prep [FILE] --crop --resize w=32 --normalise --monochrome --no-save",
-			"vector --pattern [PATTERN] --no-save",
+			"prep [FILE] --crop --resize w=32 --normalise --mono --out [FOLDER]/[FNAME]-[FILE-ID]"
+		],
+
+		[
+			"vector [FOLDER]/[FNAME]-[FILE-ID] --pattern [PATTERN] --no-save",
 			"sample --mask [FOLDER]/.sample[SAMPLE]_[PATTERN].csv --no-save",
 			"reconstruct --basis [BASIS] --no-save",
 			"devector --out [FOLDER]/[SAMPLE]_[PATTERN]_[BASIS]_[FILE-ID].png"
@@ -31,7 +36,7 @@
 	],
 	
 	"samples" : [
-		10, 25, 50, 75
+		"10", "25", "50", "75"
 	],
 	
 	"bases" : [

@@ -8,7 +8,6 @@ from scipy.signal import unit_impulse
 from scipy.ndimage import zoom
 import cvxpy as cp
 from enum import Enum
-from numba import jit
 import pywt
 from sklearn.decomposition import PCA
 
