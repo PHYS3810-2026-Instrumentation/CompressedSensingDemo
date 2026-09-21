@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, pathlib, datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,7 +6,6 @@ from scipy.fftpack import dct, idct, fft, fft2, ifft, ifft2
 from scipy.linalg import dft, hadamard
 from scipy.signal import unit_impulse
 from scipy.ndimage import zoom
-import cvxpy as cp
 from enum import Enum
 import pywt
 from sklearn.decomposition import PCA
@@ -19,6 +18,8 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
     '''
     Runs a reconstructive algorithm for sampled data Y with positions P, and signal length N, with a given basis defined by the basis attribute. Returns the reconstructed signal.
     '''
+    
+    import cvxpy as cp
 
     # MODIFICATION:
     # Add the basis name to ACCEPTED_BASISES. Can optionally add aliases (shortcuts) in the BASIS_ALIASES dict.
@@ -662,16 +663,24 @@ def squid_restrict(squid, w, h):
 Path-etch functions. Produces grid and squid.
 '''
 
-def theta_path(w, h):
+def theta_path(w, h, densities=None):
+    '''
+    Densities can contain three attributes for the Radius coefficient, R density, and Theta density. defaults to sqrt(2) for each
+    '''
+    if densities is None:
+        R_coeff, R_dens, Theta_dens = theta_R_coeff, theta_R_dens, theta_Theta_dens
+    else:
+        R_coeff, R_dens, Theta_dens = densities
+
     m_radius = max(w, h)/2
-    total_radius = int(theta_R_coeff * m_radius)
+    total_radius = int(R_coeff * m_radius)
     mid_w = w / 2.
     mid_h = h / 2.
 
     grid = np.ones((w, h)) * -1
-    total_R = int(theta_R_dens * total_radius)
+    total_R = int(R_dens * total_radius)
     R = np.linspace(0, total_radius, total_R)
-    Theta_steps = theta_Theta_dens * np.round(2 * np.pi * R)
+    Theta_steps = Theta_dens * np.round(2 * np.pi * R)
     Theta_steps = Theta_steps.astype(int)
     N = np.sum(Theta_steps) + 1
 
@@ -813,6 +822,12 @@ arguments:
         Sets starting at a specific image channel (i.e. 1 to start from Y1)
 
     -t, --tries (i)
+        Sets a maximum number of attempts at solving the problem. Will re-run the solver this number of times. Defaults to 1 (only runs once).
+
+    -p, --persist
+        Enables creating a flag that allows reconstruction to resume from a prior observed state. Only applicable when there are multiple channels to reconstruct (i.e. 3 color channels), and no variables change between runs (i.e. providing different sample masks). Does not allow resuming of an in-progress solve, only resuming channel progress. Recommended if you may interrupt the process and don't want to start from channel 0.
+
+        If the reconstruction is persistent, no-save is overridden & temporary files will be saved. If no-save and persistent are both true, these files will be deleted at the end.
 ''')
         return ltret(0, pipe)
 
@@ -823,6 +838,7 @@ arguments:
     NO_SAVE = False
     START_I = 0
     TRIES = 1
+    PERSISTENT = False
 
     idx = 0
     while idx < len(args):
@@ -843,6 +859,8 @@ arguments:
         elif arg in ('-t', '--tries'):
             idx += 1
             TRIES = int(args[idx])
+        elif arg in ('-p', '--persist'):
+            PERSISTENT = True
         else:
             IN_PATH.append(arg)
         idx += 1
@@ -897,13 +915,31 @@ arguments:
         # print(P_path)
         OUT_PATH = remove_filetype_path(P_path) + 're_'
 
+    # If the persistence flag is set, check if a persistent file flag is found.
+    PERSIST_PATH = f'{OUT_PATH}.persist'
+    PERSIST_RESUME = False
+    if PERSISTENT:
+        if os.path.exists(PERSIST_PATH) and os.path.isfile(PERSIST_PATH):
+            PERSIST_RESUME = True
+        pathlib.Path.touch(PERSIST_PATH)
+
     N = infer_length(header)
     # We now have P, Y and N. we now can do our processes!
     X = []
     if type(P) is not list:
         P = P.astype(int)
     n = START_I
+    print(f'Start: {n}/{len(Y)} @ ({datetime.datetime.now()})')
     while n < len(Y):
+        # If PERSIST_RESUME and this file exists, load it up and continue
+        tempout = f'{OUT_PATH}X{n}.csv'
+        if PERSIST_RESUME:
+            if os.path.exists(tempout) and os.path.isfile(tempout):
+                header, tmp = csv_header(tempout)
+                X.append(tmp)
+                n += 1
+                continue
+        
         Yn = Y[n]
         passed = False
         tmp = None
@@ -920,10 +956,21 @@ arguments:
 
         tmp = (tmp - np.min(tmp)) / (np.max(tmp) - np.min(tmp))
         X.append(tmp)
-        if not NO_SAVE:
-            np.savetxt(f'{OUT_PATH}X{n}.csv', tmp, fmt='%f', delimiter=',', header=header)
+
+        if not NO_SAVE or PERSISTENT:
+            np.savetxt(tempout, tmp, fmt='%f', delimiter=',', header=header)
         n += 1
-        print(f'{n}/{len(Y)} (L1/N = {np.sum(tmp) /  tmp.shape})')
+        print(f'{n}/{len(Y)} (L1/N = {np.sum(tmp) /  tmp.shape}) @ ({datetime.datetime.now()})')
+
+    # and unlink the persistent file too, along with any temp files
+    if PERSISTENT:
+        if NO_SAVE:
+            for n in range(len(Y)):
+                tempout = f'{OUT_PATH}X{n}.csv'
+                if os.path.exists(tempout) and os.path.isfile(tempout):
+                    pathlib.Path.unlink(tempout)
+        if os.path.exists(PERSIST_PATH) and os.path.isfile(PERSIST_PATH):
+            pathlib.Path.unlink(PERSIST_PATH)
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, [header, X]))
@@ -1026,6 +1073,8 @@ arguments:
         w, h = data.shape[0], data.shape[1]
         N = w*h
     else:
+        if len(data.shape) == 1:
+            data = np.reshape(data, (data.shape[0], 1))
         N = data.shape[0]
         channels = data.shape[1]
     
@@ -1419,6 +1468,9 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
         
         -ns, --no-save
             Disables saving of files to disk. Saving turned on by default.
+
+        -na, --no-alpha
+            Strips out the alpha channel before saving if an alpha channel is present. Off by default.
     ''')
         return ltret(0, pipe)
     
@@ -1428,6 +1480,7 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     DO_CROP = False
     NORMALISE = False
     NO_SAVE = False
+    NO_ALPHA = False
     MONO = False
 
     idx = 0
@@ -1442,6 +1495,8 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
             NO_SAVE = True
         elif arg in ('-m', '--mono'):
             MONO = True
+        elif arg in ('-na', '--no-alpha'):
+            NO_ALPHA = True
         elif arg in ('-r', '--resize'):
             idx += 1
             tmp = args[idx].split('=')
@@ -1469,7 +1524,7 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
             IN_PATH = inp[0]
             image = inp[1]
         else:
-            IN_PATH = f'./blank'
+            IN_PATH = f'./blank.jpg'
             image = np.ones((256, 256, 3))
     else:
         if file_precache is not None and IN_PATH in file_precache:
@@ -1503,11 +1558,6 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
 
         image = zoom(image, (factor, factor, 1))
 
-    if NORMALISE:
-        if image.dtype == np.uint8:
-            image = image.astype(np.float32)
-            image = image / 255.0
-
     if MONO:
         r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
         pretype = image.dtype
@@ -1517,6 +1567,16 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
         if pretype == np.uint8:
             image = image / np.sqrt(np.pow(255, 2)*3)
             image = image.astype(np.uint8)
+
+    if NORMALISE:
+        if image.dtype == np.uint8:
+            image = image.astype(np.float32)
+            image = image / 255.0
+        else:
+            image = image / np.max(image)
+
+    if NO_ALPHA and image.shape[2] == 4:
+        image = image[:,:,:3]
 
     if not NO_SAVE:
         if MONO:

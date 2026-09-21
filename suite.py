@@ -37,12 +37,15 @@ def operate_test(entry:dict):
     BIDX = 4
     ptrs = [0, 0, 0, 0, 0]
 
-    if not os.path.exists(folder):
-        os.mkdir(folder)
+    folder_parts = re.split(r'[\\/]+', folder)
+    for n in range(1, len(folder_parts)):
+        tmp_folder = '/'.join(folder_parts[0:n])
+        if not os.path.exists(tmp_folder):
+            os.mkdir(tmp_folder)
 
     if os.path.exists(_state_path):
         with open(_state_path) as fp:
-            state = json.load(_state_path)
+            state = json.load(fp)
 
         if state['name'] != name or state['folder'] != folder:
             print(f'Error - state found for {name} @ {folder} doesn\'t seem to match!')
@@ -100,6 +103,7 @@ def operate_test(entry:dict):
 
         sent_flag = True
         while sent_flag:
+            savestate(_state_path, name, folder, *ptrs)
             command = COMMAND_RAW
             # insert elements into command
             for dyn in DYNAMIC_REPLACE:
@@ -128,21 +132,9 @@ def operate_test(entry:dict):
                         anchor_inc -= 1
                     else:
                         kill_flag = True
-                savestate(_state_path, name, folder, *ptrs)
 
                 if kill_flag:
                     break
-
-            pass
-
-        
-        # reset everything but CIDX, increment CIDX, save state and continue
-        for n in range(CIDX+1, len(ptrs)):
-            ptrs[n] = 0
-        
-        ptrs[CIDX] += 1
-
-        savestate(_state_path, name, folder, *ptrs)
 
     # clean up states
     if os.path.exists(_state_path):
