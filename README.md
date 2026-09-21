@@ -35,18 +35,19 @@ In the command line, multiple functions can be written with a comma separating e
 The file `suite.py` is another command-line utility capable of performing compressed sensing functions (those defined within `cspy.py`) upon numerous files or setups. `suite.py` takes a .json file defining the suite commands and parameters, and iteratively performs each command for all permutations of those command parameters. An example suite file can be seen in `./suites/multipattern.json`.
 
 The suite file has five key fields, all of which are list objects. These fields are:
-    - commands
-    - files
-    - patterns
-    - samples
-    - bases
+ - commands
+ - files
+ - patterns
+ - samples
+ - bases
+
 The `commands` field is a list of lists of strings, where each sub-list defines multiple `cspy.py` function commands to be executed within a command pipeline. Each sub-list is disconnected from each other (i.e. are not operated as one long command pipeline). The commands can refer to parameters defined elsewhere in the suite file with square brackets. The list of parameters are below.
-    - `[FILE]`      the path to each input file
-    - `[FILE-ID]`   the ID of each input file
-    - `[FNAME]`     the name of each input file, excluding path and filetype
-    - `[BASIS]`     each transformation basis to be used
-    - `[SAMPLE]`    each sample percentage to be used
-    - `[PATTERN]`   each vectorization pattern to be used
+ - `[FILE]`      the path to each input file
+ - `[FILE-ID]`   the ID of each input file
+ - `[FNAME]`     the name of each input file, excluding path and filetype
+ - `[BASIS]`     each transformation basis to be used
+ - `[SAMPLE]`    each sample percentage to be used
+ - `[PATTERN]`   each vectorization pattern to be used
 
 The parameters are appropriately defined by the other four field lists. Each of these parameter field lists should be a list of strings.
 
