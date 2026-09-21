@@ -1,0 +1,6 @@
+numpy
+scipy
+matplotlib
+cvxpy
+pywavelets
+scikit-learn
