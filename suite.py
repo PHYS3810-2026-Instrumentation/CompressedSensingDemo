@@ -148,6 +148,13 @@ if len(sys.argv) <= 1:
 
 paths = sys.argv[1:]
 
+FORCE_YES = '-y' in paths
+FORCE_NO = '-n' in paths
+if FORCE_YES:
+    paths.remove('-y')
+if FORCE_NO:
+    paths.remove('-n')
+
 def find_state_path(path:str):
     parts = re.split(r'[\\/]+', path)
     fname = parts[-1]
@@ -176,7 +183,17 @@ for path in paths:
 
     if os.path.exists(statuspath) or os.path.exists(f'{statuspath}.bak'):
         print(f'Found a file at status path {statuspath}: resume from this state for suite {path}? (Y/N)')
-        usr = ''
+        if not FORCE_YES and not FORCE_NO:
+            usr = ''
+        elif FORCE_YES:
+            usr = 'y'
+            print('yes')
+        elif FORCE_NO:
+            usr = 'n'
+            print('no')
+        else:
+            usr = ''
+            
         while usr not in ('y', 'n'):
             usr = input()
             usr = usr.lower()
