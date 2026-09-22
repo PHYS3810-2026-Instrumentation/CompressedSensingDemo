@@ -954,7 +954,7 @@ arguments:
     if type(P) is not list:
         P = P.astype(int)
     n = START_I
-    print(f'Start: {n}/{len(Y)} @ ({datetime.datetime.now()})')
+    # print(f'Start: {n}/{len(Y)} @ ({datetime.datetime.now()})')
     while n < len(Y):
         # If PERSIST_RESUME and this file exists, load it up and continue
         tempout = f'{OUT_PATH}X{n}.csv'
@@ -986,7 +986,7 @@ arguments:
         if not NO_SAVE or PERSISTENT:
             np.savetxt(tempout, tmp, fmt='%f', delimiter=',', header=header)
         n += 1
-        print(f'{n}/{len(Y)} (L1/N = {np.sum(tmp) /  tmp.shape}) @ ({datetime.datetime.now()})')
+        # print(f'{n}/{len(Y)} (L1/N = {np.sum(tmp) /  tmp.shape}) @ ({datetime.datetime.now()})')
 
     # and unlink the persistent file too, along with any temp files
     if PERSISTENT:
