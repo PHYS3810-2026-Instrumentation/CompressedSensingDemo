@@ -57,7 +57,9 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             return np.real(np.flip(ifft(s_l1.value)))
 
         case 'hadamard':
-            theta = (hadamard(N) / np.sqrt(N))[P, :]
+            nlogup = np.pow(2, np.ceil(np.log2(N))).astype(int)
+            
+            theta = (hadamard(nlogup) / np.sqrt(nlogup))[P, :]
             
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -65,7 +67,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             problem = cp.Problem(obj, cons)
             problem.solve(verbose=verbose)
 
-            return np.real(np.dot(hadamard(N) / np.sqrt(N), s_l1.value))
+            return np.real(np.dot(hadamard(nlogup) / np.sqrt(nlogup), s_l1.value))[:N]
 
         case 'haar':
             max_level = pywt.dwt_max_level(data_len=N, filter_len=9)
@@ -154,7 +156,8 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
             return _boundary_safe_cdf972_reconstruct(s_l1.value, N)
 
         case 'improved-hadamard':
-            theta = _hadamard_forward_with_edge_handling(P,N)
+            nlogup = np.pow(2, np.ceil(np.log2(N))).astype(int)
+            theta = _hadamard_forward_with_edge_handling(P,nlogup)
 
             s_l1 = cp.Variable(theta.shape[1], complex=True)
             obj = cp.Minimize(cp.norm(s_l1, 1))
@@ -164,7 +167,7 @@ def RECONSTRUCT_DRIVER(Y, P, N, basis, verbose:bool = False):
 
             s = np.real(s_l1.value)
 
-            return _hadamard_inverse_with_edge_handling(s, N)
+            return _hadamard_inverse_with_edge_handling(s, nlogup)[:N]
 
         case 'improved-fourier':
             theta = _fourier_forward_smooth_edges(P, N)
