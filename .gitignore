@@ -1,2 +1,5 @@
 ./testdata
 ./testdata/*
+./suites/runs/*
+./out/*
+./examine.ipynb

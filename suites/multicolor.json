@@ -1,0 +1,49 @@
+{
+	"name" : "MultiColor",
+	"folder" : "./suites/runs/MultiColor/",
+	"notes" : "Generates color comparisons of the main vectorization patterns used. Each pattern utilizes the same sample for each sample percent",
+	
+	"commands" : [
+		[
+			"prep --crop --resize w=32 --no-save",
+			"sample [SAMPLE]% --out [FOLDER]/.sample[SAMPLE].png"
+		],
+
+		[
+            "prep [FOLDER]/.sample[SAMPLE].png --mono --no-save",
+			"vector --pattern [PATTERN] --out [FOLDER]/.sample[SAMPLE]_[PATTERN].csv"
+		],
+
+		[
+			"prep [FILE] --crop --resize w=32 --normalise --out [FOLDER]/[FNAME]-[FILE-ID].png"
+		],
+
+		[
+            "prep [FOLDER]/[FNAME]-[FILE-ID].png --no-alpha --no-save",
+			"vector --pattern [PATTERN] --no-save",
+			"sample --mask [FOLDER]/.sample[SAMPLE]_[PATTERN].csv --no-save",
+			"reconstruct --basis [BASIS] --no-save --persist",
+			"devector --out [FOLDER]/[SAMPLE]_[PATTERN]_[BASIS]_[FILE-ID].png"
+		]
+	],
+	
+	"files" : [
+		"./testdata/crab.jpg",
+        "./testdata/pacman.jpg"
+	],
+	
+	"patterns" : [
+		"xy",
+		"theta",
+		"snake_square"
+	],
+	
+	"samples" : [
+		"50", "75"
+	],
+	
+	"bases" : [
+		"dct",
+		"fft"
+	]
+}
