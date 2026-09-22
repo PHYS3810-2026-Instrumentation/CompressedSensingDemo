@@ -38,7 +38,7 @@ def operate_test(entry:dict):
     ptrs = [0, 0, 0, 0, 0]
 
     folder_parts = re.split(r'[\\/]+', folder)
-    for n in range(1, len(folder_parts)):
+    for n in range(1, len(folder_parts)+1):
         tmp_folder = '/'.join(folder_parts[0:n])
         if not os.path.exists(tmp_folder):
             os.mkdir(tmp_folder)

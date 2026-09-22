@@ -1,0 +1,47 @@
+{
+	"name" : "big",
+	"folder" : "./suites/runs/big",
+	"notes" : "The big one. Burns through many many files with theta, xy & multiple samples. Does DCT & Fourier",
+	
+	"commands" : [
+		[
+			"prep --crop --resize w=32 --no-save",
+			"sample [SAMPLE]% --out [FOLDER]/.sample[SAMPLE].png"
+		],
+
+		[
+            "prep [FOLDER]/.sample[SAMPLE].png --mono --no-save",
+			"vector --pattern [PATTERN] --out [FOLDER]/.sample[SAMPLE]_[PATTERN].csv"
+		],
+
+		[
+			"prep [FILE] --crop --resize w=32 --mono --no-alpha --normalise --out [FOLDER]/[FNAME]-[FILE-ID].png"
+		],
+
+		[
+            "prep [FOLDER]/[FNAME]-[FILE-ID].png --normalise --mono --no-alpha --no-save",
+			"vector --pattern [PATTERN] --no-save",
+			"sample --mask [FOLDER]/.sample[SAMPLE]_[PATTERN].csv --no-save",
+			"reconstruct --basis [BASIS] --no-save --persist",
+			"devector --out [FOLDER]/[SAMPLE]_[PATTERN]_[BASIS]_[FILE-ID].png"
+		]
+	],
+	
+	"files" : [
+		"./suitedata/gamma/*.png"
+	],
+	
+	"patterns" : [
+		"xy",
+		"theta"
+	],
+	
+	"samples" : [
+		"10", "25", "50", "75"
+	],
+	
+	"bases" : [
+		"dct",
+		"fft"
+	]
+}

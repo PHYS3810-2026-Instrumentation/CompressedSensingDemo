@@ -659,6 +659,27 @@ def squid_restrict(squid, w, h):
     squid = np.transpose(squid)
     return squid[p, :][0]
 
+def image_saver(image, path, MONO:bool = False):
+    # protect image range
+    if image.dtype == np.float32:
+        image = np.clip(image, 0, 1)
+
+    if len(image.shape) == 2:
+        image = np.reshape(image, (image.shape[0], image.shape[1], 1))
+
+    # print(f'saving {path}, image shape {image.shape}')
+    if image.shape[2] == 1:
+        tmp = np.zeros((image.shape[0], image.shape[1], 3))
+        for n in range(3):
+            tmp[:,:,n] = image[:,:,0]
+        image = tmp
+        MONO = True
+
+    if MONO:
+        plt.imsave(path, image, cmap='gray')
+    else:
+        plt.imsave(path, image)
+
 '''
 Path-etch functions. Produces grid and squid.
 '''
@@ -943,11 +964,12 @@ arguments:
         Yn = Y[n]
         passed = False
         tmp = None
+        from cvxpy import SolverError
         for t in range(TRIES):
             try:
                 tmp = RECONSTRUCT_DRIVER(Yn, P, N, BASIS, verbose=VERBOSE)
                 passed = True
-            except cp.error.SolverError as e:
+            except SolverError as e:
                 print(f'Caught solver error! {t+1}/{TRIES}\n{e}')
         # print(f'{np.min(tmp)} -> {np.max(tmp)}')
         if tmp is None or not passed:
@@ -1109,7 +1131,7 @@ arguments:
         w, h = data.shape[0], data.shape[1]
         sample_mask_image = np.reshape(sample_mask, (w, h, 3))
         if not NO_SAVE:
-            plt.imsave(OUT_PATH, sample_mask_image)
+            image_saver(sample_mask_image, OUT_PATH)
         if pipe:
             return ltret(0, payload=(OUT_PATH, sample_mask_image))
     else:
@@ -1360,7 +1382,7 @@ def devector(args, pipe:bool = False, inp:any = None, file_precache:dict = None)
         image = image.astype(np.uint8)
     
     if not NO_SAVE:
-        plt.imsave(OUT_PATH, image)
+        image_saver(image, OUT_PATH)
     if pipe:
         return ltret(0, payload=(OUT_PATH, image))
 
@@ -1416,7 +1438,7 @@ def monochrome(args, pipe:bool = False, inp:any = None, file_precache:dict = Non
 
     if len(image.shape) == 2:
         image = np.reshape(image, (image.shape[0], image.shape[1], 1))
-        plt.imsave(OUT_PATH, image)
+        image_saver(image, OUT_PATH)
 
         if pipe:
             return ltret(0, payload=(OUT_PATH, image))
@@ -1430,7 +1452,7 @@ def monochrome(args, pipe:bool = False, inp:any = None, file_precache:dict = Non
     outimg = np.sqrt(np.pow(r, 2) + np.pow(g, 2) + np.pow(b, 2))
     outimg = outimg * 255
     outimg = outimg.astype(int)
-    plt.imsave(OUT_PATH, outimg, cmap='gray')
+    image_saver(outimg, OUT_PATH, True)
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, outimg))
@@ -1562,11 +1584,12 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
         r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
         pretype = image.dtype
         
-        image = np.sqrt(np.pow(r, 2) + np.pow(g, 2) + np.pow(b, 2))
+        image = np.sqrt((np.pow(r, 2) + np.pow(g, 2) + np.pow(b, 2))/3)
 
         if pretype == np.uint8:
-            image = image / np.sqrt(np.pow(255, 2)*3)
             image = image.astype(np.uint8)
+
+        image = np.reshape(image, (image.shape[0], image.shape[1], 1))
 
     if NORMALISE:
         if image.dtype == np.uint8:
@@ -1578,11 +1601,11 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     if NO_ALPHA and image.shape[2] == 4:
         image = image[:,:,:3]
 
+    if image.dtype == np.float32:
+        image = np.clip(image, 0, 1)
+
     if not NO_SAVE:
-        if MONO:
-            plt.imsave(OUT_PATH, image, cmap='gray')
-        else:
-            plt.imsave(OUT_PATH, image)
+        image_saver(image, OUT_PATH, MONO)
 
     if pipe:
         return ltret(0, payload=(OUT_PATH, image))
