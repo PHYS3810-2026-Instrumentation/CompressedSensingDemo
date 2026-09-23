@@ -3,7 +3,7 @@ import numpy as np
 from glob import glob
 import re
 
-def operate_test(entry:dict):
+def operate_test(entry:dict, sequence:str='BSPF'):
     _state_path = entry['_status']
 
     def savestate(path, name, folder, cidx, fidx, pidx, sidx, bidx):
@@ -36,6 +36,21 @@ def operate_test(entry:dict):
     SIDX = 3
     BIDX = 4
     ptrs = [0, 0, 0, 0, 0]
+
+    # order in which to check rollovers, instead of just negative order thru ptrs array
+    inc_ptrs = [0, 0, 0, 0, CIDX]
+    idx = 0
+    for Ch in sequence:
+        match Ch:
+            case 'F':
+                inc_ptrs[idx] = FIDX
+            case 'P':
+                inc_ptrs[idx] = PIDX
+            case 'S':
+                inc_ptrs[idx] = SIDX
+            case 'B':
+                inc_ptrs[idx] = BIDX
+        idx += 1
 
     folder_parts = re.split(r'[\\/]+', folder)
     for n in range(1, len(folder_parts)+1):
@@ -115,21 +130,23 @@ def operate_test(entry:dict):
             cspy.cspy_engine(command)
 
             # tick up counters
-            anchor_inc = BIDX
-            while anchor_inc >= 0:
+            super_anchor_inc = 0
+            while super_anchor_inc < len(inc_ptrs):
+                anchor_inc = inc_ptrs[super_anchor_inc]
                 kill_flag = False
                 if anchor_inc == 0:
                     ptrs[anchor_inc] += 1
                     sent_flag = False
+                    break
 
                 if not DYNAMIC_FLAGS[anchor_inc]:
-                    anchor_inc -= 1
+                    super_anchor_inc += 1
                     continue
                 else:
                     ptrs[anchor_inc] += 1
                     if ptrs[anchor_inc] >= MAXES[anchor_inc]:
                         ptrs[anchor_inc] = 0
-                        anchor_inc -= 1
+                        super_anchor_inc += 1
                     else:
                         kill_flag = True
 
@@ -146,14 +163,27 @@ if len(sys.argv) <= 1:
     print(f'Provide a path to a .json file (or files) defining the test runs.')
     exit(0)
 
-paths = sys.argv[1:]
-
-FORCE_YES = '-y' in paths
-FORCE_NO = '-n' in paths
-if FORCE_YES:
-    paths.remove('-y')
-if FORCE_NO:
-    paths.remove('-n')
+FORCE_ANSWER = ''
+SEQUENCE = 'BSPF'
+paths = []
+args = sys.argv[1:]
+idx = 0
+while idx < len(args):
+    arg = args[idx]
+    if arg in ('-y', '-n', '--yes', '--no'):
+        FORCE_ANSWER = 'y' if arg in ('-y', '--yes') else 'n'
+    elif arg in ('-s', '--sequence'):
+        idx += 1
+        SEQUENCE = args[idx].upper()
+        if len(SEQUENCE) != 4:
+            print(f'Sequence arg must be only 4 characters long! Got {SEQUENCE}')
+            exit(0)
+        if re.match(r'[F|B|S|P]+', SEQUENCE) == None:
+            print(f'Sequence {SEQUENCE} did not match regex check! Must consist of unique occurrences of F,B,S,P')
+            exit(0)
+    else:
+        paths.append(arg)
+    idx += 1
 
 def find_state_path(path:str):
     parts = re.split(r'[\\/]+', path)
@@ -183,17 +213,7 @@ for path in paths:
 
     if os.path.exists(statuspath) or os.path.exists(f'{statuspath}.bak'):
         print(f'Found a file at status path {statuspath}: resume from this state for suite {path}? (Y/N)')
-        if not FORCE_YES and not FORCE_NO:
-            usr = ''
-        elif FORCE_YES:
-            usr = 'y'
-            print('yes')
-        elif FORCE_NO:
-            usr = 'n'
-            print('no')
-        else:
-            usr = ''
-            
+        usr = FORCE_ANSWER
         while usr not in ('y', 'n'):
             usr = input()
             usr = usr.lower()
@@ -208,4 +228,4 @@ for path in paths:
     entries.append(entry)
 
 for entry in entries:
-    operate_test(entry)
+    operate_test(entry, SEQUENCE)
