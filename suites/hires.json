@@ -6,7 +6,7 @@
 	"commands" : [
 		[
 			"prep --crop --resize w=64 --no-save",
-			"sample [SAMPLE]% --out [FOLDER]/.sample[SAMPLE].png"
+			"sample [SAMPLE]% --out [FOLDER]/_sample[SAMPLE].png"
 		],
 
 		[
@@ -15,11 +15,11 @@
 		],
 
 		[
-			"prep [FILE] --crop --resize w=64 --mono --no-alpha --normalise --out [FOLDER]/[FNAME]-[FILE-ID].png"
+			"prep [FILE] --crop --resize w=64 --mono --no-alpha --normalise --out [FOLDER]/_[FNAME]-[FILE-ID].png"
 		],
 
 		[
-            "prep [FOLDER]/[FNAME]-[FILE-ID].png --normalise --mono --no-alpha --no-save",
+            "prep [FOLDER]/_[FNAME]-[FILE-ID].png --normalise --mono --no-alpha --no-save",
 			"vector --pattern [PATTERN] --no-save",
 			"sample --mask [FOLDER]/.sample[SAMPLE]_[PATTERN].csv --no-save",
 			"reconstruct --basis [BASIS] --no-save --persist",
