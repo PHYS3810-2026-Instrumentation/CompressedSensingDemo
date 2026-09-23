@@ -1,9 +1,9 @@
-import os, sys, json, pathlib
+import os, sys, json, pathlib, datetime
 import numpy as np
 from glob import glob
 import re
 
-def operate_test(entry:dict, sequence:str='BSPF'):
+def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
     _state_path = entry['_status']
 
     def savestate(path, name, folder, cidx, fidx, pidx, sidx, bidx):
@@ -20,6 +20,11 @@ def operate_test(entry:dict, sequence:str='BSPF'):
 
         with open(path, mode='w') as fp:
             json.dump(tmp, fp, indent=None)
+
+    def logprint(fileptr, string, term = '\n'):
+        if fileptr is None:
+            return
+        print(f'[{datetime.datetime.now()}]\t{string}', end=term, file=fileptr)
 
     name = entry['name']
     folder = entry['folder']
@@ -58,6 +63,7 @@ def operate_test(entry:dict, sequence:str='BSPF'):
         if not os.path.exists(tmp_folder):
             os.mkdir(tmp_folder)
 
+    RESUME_FLAG = False
     if os.path.exists(_state_path):
         with open(_state_path) as fp:
             state = json.load(fp)
@@ -67,10 +73,20 @@ def operate_test(entry:dict, sequence:str='BSPF'):
             exit(-4)
 
         ptrs = state['pointers']
-    
+        RESUME_FLAG = True
+
+    FILE_PTR = None
+    if logging:
+        logpath = entry['_log']
+        pathlib.Path.touch(logpath)
+        FILE_PTR = open(file=logpath, mode='a')
+
+        if RESUME_FLAG:
+            logprint(FILE_PTR, 'Resuming suite run')
+        else:
+            logprint(FILE_PTR, 'Beginning suite run')
 
     # eval all file names
-
     temp = []
     for path in files:
         fnames = glob(path)
@@ -78,7 +94,11 @@ def operate_test(entry:dict, sequence:str='BSPF'):
     files = temp
     del temp
 
+    logprint(FILE_PTR, f'Identified {len(files)} files:\n\t{'\n\t'.join(files)}')
+
     MAXES = [len(commands), len(files), len(patterns), len(samples), len(bases)]
+
+    logprint(FILE_PTR, f'Maxes (SEQ={sequence}): {','.join([str(e) for e in MAXES])} ({np.sum(MAXES).astype(int)} combinations)')
 
     MONO_REPLACE = {
         '[FOLDER]' : folder,
@@ -101,6 +121,7 @@ def operate_test(entry:dict, sequence:str='BSPF'):
     import cspy
     while ptrs[CIDX] < MAXES[CIDX]:
         COMMAND_RAW = ', '.join(commands[ptrs[CIDX]])
+        logprint(FILE_PTR, f'Starting command\t{COMMAND_RAW}')
 
         # check mono replacements
         for mono in MONO_REPLACE:
@@ -108,26 +129,38 @@ def operate_test(entry:dict, sequence:str='BSPF'):
                 COMMAND_RAW = COMMAND_RAW.replace(mono, MONO_REPLACE[mono])
 
         DYNAMIC_FLAGS = [False] * 5
+        perms = 1
         for dyn in DYNAMIC_REPLACE:
             if dyn in COMMAND_RAW:
                 k = DYNAMIC_REPLACE[dyn][1]
                 DYNAMIC_FLAGS[k] = True
+                perms *= MAXES[k]
                 if MAXES[k] == 0:
-                    print(f'Error - Calling upon {dyn} in command {COMMAND_RAW}, but {dyn} has no entries!')
+                    logprint(FILE_PTR, f'Error - Calling upon {dyn} in command {COMMAND_RAW}, but {dyn} has no entries!')
                     exit(-4)
+        logprint(FILE_PTR, f'Command should have {perms} permutations')
 
         sent_flag = True
+        N = 0
         while sent_flag:
             savestate(_state_path, name, folder, *ptrs)
+            # logprint(FILE_PTR, 'Updated state file')
             command = COMMAND_RAW
+            params = []
             # insert elements into command
             for dyn in DYNAMIC_REPLACE:
                 if dyn in command:
                     replace_set, replace_ptr, _ = DYNAMIC_REPLACE[dyn]
-                    command = command.replace(dyn, replace_set[ptrs[replace_ptr]])
+                    tmp = replace_set[ptrs[replace_ptr]]
+                    command = command.replace(dyn, tmp)
+                    params.append(f'{dyn}:{tmp}')
 
             # issue command
-            cspy.cspy_engine(command)
+            params = ', '.join(params)
+            logprint(FILE_PTR, f'{N}/{perms}\t{params}')
+            response = cspy.cspy_engine(command)
+            logprint(FILE_PTR, f'Code {response}')
+            N += 1
 
             # tick up counters
             super_anchor_inc = 0
@@ -153,6 +186,10 @@ def operate_test(entry:dict, sequence:str='BSPF'):
                 if kill_flag:
                     break
 
+    logprint(FILE_PTR, f'Finished suite! Wrapping up')
+    if logging:
+        FILE_PTR.close()
+    
     # clean up states
     if os.path.exists(_state_path):
         pathlib.Path.unlink(_state_path)
@@ -165,6 +202,7 @@ if len(sys.argv) <= 1:
 
 FORCE_ANSWER = ''
 SEQUENCE = 'BSPF'
+DO_WRITE = False
 paths = []
 args = sys.argv[1:]
 idx = 0
@@ -172,6 +210,8 @@ while idx < len(args):
     arg = args[idx]
     if arg in ('-y', '-n', '--yes', '--no'):
         FORCE_ANSWER = 'y' if arg in ('-y', '--yes') else 'n'
+    elif arg in ('-l', '--log'):
+        DO_WRITE = True
     elif arg in ('-s', '--sequence'):
         idx += 1
         SEQUENCE = args[idx].upper()
@@ -189,6 +229,12 @@ def find_state_path(path:str):
     parts = re.split(r'[\\/]+', path)
     fname = parts[-1]
     fname = f'.{fname}.state'
+    return '/'.join(parts[:-1]) + '/' + fname
+
+def find_log_path(path:str):
+    parts = re.split(r'[\\/]+', path)
+    fname = parts[-1]
+    fname = f'.{fname}.log'
     return '/'.join(parts[:-1]) + '/' + fname
 
 entries = []
@@ -209,6 +255,8 @@ for path in paths:
         exit(-3)
 
     entry['_status'] = find_state_path(path)
+    entry['_log'] = find_log_path(path)
+    logpath = entry['_log']
     statuspath = entry['_status']
 
     if os.path.exists(statuspath) or os.path.exists(f'{statuspath}.bak'):
@@ -221,6 +269,8 @@ for path in paths:
             pathlib.Path.unlink(statuspath)
             if os.path.exists(f'{statuspath}.bak'):
                 pathlib.Path.unlink(f'{statuspath}.bak')
+            if os.path.exists(logpath):
+                pathlib.Path.unlink(logpath)
         else:
             if not os.path.exists(statuspath):
                 os.rename(f'{statuspath}.bak', statuspath)
@@ -228,4 +278,4 @@ for path in paths:
     entries.append(entry)
 
 for entry in entries:
-    operate_test(entry, SEQUENCE)
+    operate_test(entry, SEQUENCE, DO_WRITE)
