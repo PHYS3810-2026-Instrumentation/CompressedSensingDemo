@@ -158,6 +158,8 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
             # issue command
             params = ', '.join(params)
             logprint(FILE_PTR, f'{N}/{perms}\t{params}')
+            if logging:
+                FILE_PTR.flush()
             response = cspy.cspy_engine(command)
             logprint(FILE_PTR, f'Code {response}')
             N += 1
@@ -188,6 +190,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
 
     logprint(FILE_PTR, f'Finished suite! Wrapping up')
     if logging:
+        FILE_PTR.flush()
         FILE_PTR.close()
     
     # clean up states
