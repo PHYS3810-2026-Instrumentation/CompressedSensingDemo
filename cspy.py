@@ -661,7 +661,16 @@ def squid_restrict(squid, w, h):
         np.logical_and(squid[0] < w, squid[1] < h)
     ))
     squid = np.transpose(squid)
-    return squid[p, :][0]
+    return squid[p, :][0], p
+
+def squid_restrict_data(squid, signal, w, h):
+    squid = np.transpose(squid)
+    p = np.where(np.logical_and(
+        np.logical_and(squid[0] >= 0, squid[1] >= 0),
+        np.logical_and(squid[0] < w, squid[1] < h)
+    ))
+    squid = np.transpose(squid)
+    return squid[p, :][0], signal[p], p
 
 def image_saver(image, path, MONO:bool = False):
     # protect image range
@@ -802,11 +811,39 @@ def xy_path(w, h):
 
     return grid, squid
 
+def theta_min_special_devector(signal, W, H):
+    grid, squid = theta_path(W, H)
+    squid, signal_res, p = squid_restrict_data(squid, signal, W, H)
+    Y, X = squid[:,0], squid[:, 1]
+
+    # apply theta sensitive mean
+    blank = np.zeros((W, H))
+    count_correction = np.zeros((W, H))
+    np.add.at(blank, (Y, X), signal_res)
+    np.add.at(count_correction, (Y, X), 1)
+    count_correction = np.where(count_correction == 0, 1, count_correction)
+    inverse_count_correction = np.pow(count_correction, -1)
+    blank = blank * inverse_count_correction
+
+    # apply theta sensitive L1 minimum
+    np.minimum.at(blank, (Y, X), signal_res)
+
+    return blank
+
+    
+
 PATH_FUNCS = {
     'theta' : theta_path,
     'snake_square' : snake_square_path,
     'snake_square_inv' : snake_inv_square_path,
-    'xy' : xy_path
+    'xy' : xy_path,
+    'theta_min' : theta_path # has a special resolve case!
+}
+
+PATH_FUNCS_SPECIAL_VECTOR = { }
+
+PATH_FUNCS_SPECIAL_DEVECTOR = {
+    'theta_min' : theta_min_special_devector
 }
 
 '''
@@ -1249,9 +1286,11 @@ def vector(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
 
     w, h, c = image_shape_props(image)     
     grid, squid = PATH_FUNCS[PATTERN](w, h)
-    squid = squid_restrict(squid, w, h)     
+    N = squid.shape[0]
+    squid, p = squid_restrict(squid, w, h)     
     x, y = squid[:,0], squid[:,1]
-    out = image[y, x]
+    out = np.zeros((N, 1))
+    out[p] = image[y, x]
     header = f'{PATTERN} {w} {h}'  
 
     if not SEPARATE:
@@ -1362,22 +1401,30 @@ def devector(args, pipe:bool = False, inp:any = None, file_precache:dict = None)
     w = int(header[1])
     h = int(header[2])
     grid, squid = PATH_FUNCS[format_type](w, h)
-    squid = squid_restrict(squid, w, h)
-    x, y = squid[:,0], squid[:,1]
+    # squid, p = squid_restrict(squid, w, h)
+    # x, y = squid[:,0], squid[:,1]
 
     if MULTI_DATA:
         image = np.zeros((w, h, len(data)))
         for n in range(len(data)):
-            image[y, x, n] = data[n][grid[y, x]]
+            if format_type in PATH_FUNCS_SPECIAL_DEVECTOR:
+                image[:,:,n] = PATH_FUNCS_SPECIAL_DEVECTOR[format_type](data[n], w, h)
+            else:
+                squid_res, dat_res, p = squid_restrict_data(squid, data[n], w, h)
+                x, y = squid_res[:,0], squid_res[:,1]
+                image[y, x, n] = dat_res
     else:
         if len(data.shape) == 2:
             c = data.shape[1]
         else:
             c = 1
         image = np.zeros((w, h, c))
-        print(image.shape)
-        print(data[grid[y, x]].shape)
-        image[y, x, 0] = data[grid[y, x]]
+        if format_type in PATH_FUNCS_SPECIAL_DEVECTOR:
+            image[:,:,0] = PATH_FUNCS_SPECIAL_DEVECTOR[format_type](data, w, h)
+        else:
+            squid_res, dat_res, p = squid_restrict_data(squid, data, w, h)
+            x, y = squid_res[:,0], squid_res[:,1]
+            image[y, x, 0] = dat_res
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
