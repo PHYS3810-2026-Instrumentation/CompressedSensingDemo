@@ -65,6 +65,12 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
         if not os.path.exists(tmp_folder):
             os.mkdir(tmp_folder)
 
+    FILE_PTR = None
+    if logging:
+        logpath = entry['_log']
+        pathlib.Path.touch(logpath)
+        FILE_PTR = open(file=logpath, mode='a')
+
     RESUME_FLAG = False
     if os.path.exists(_state_path):
         with open(_state_path) as fp:
@@ -75,18 +81,18 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
             exit(-4)
 
         ptrs = state['pointers']
+        if 'sequence' in state:
+            prev_seq = state['sequence']
+        else:
+            prev_seq = sequence
+        if prev_seq != sequence:
+            logprint(FILE_PTR, f'Warning: current sequence {sequence} does not match previous sequence {prev_seq}! Continuing anyway. I trust your judgement.')
         RESUME_FLAG = True
 
-    FILE_PTR = None
-    if logging:
-        logpath = entry['_log']
-        pathlib.Path.touch(logpath)
-        FILE_PTR = open(file=logpath, mode='a')
-
-        if RESUME_FLAG:
-            logprint(FILE_PTR, 'Resuming suite run')
-        else:
-            logprint(FILE_PTR, 'Beginning suite run')
+    if RESUME_FLAG:
+        logprint(FILE_PTR, f'Resuming suite run.')
+    else:
+        logprint(FILE_PTR, f'Beginning suite run.')
 
     # eval all file names
     temp = []
