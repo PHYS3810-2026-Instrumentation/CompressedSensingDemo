@@ -661,7 +661,7 @@ def squid_restrict(squid, w, h):
         np.logical_and(squid[0] < w, squid[1] < h)
     ))
     squid = np.transpose(squid)
-    return squid[p, :][0], p
+    return squid[p, :][0], p[0]
 
 def squid_restrict_data(squid, signal, w, h):
     squid = np.transpose(squid)
@@ -1289,7 +1289,8 @@ def vector(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     N = squid.shape[0]
     squid, p = squid_restrict(squid, w, h)     
     x, y = squid[:,0], squid[:,1]
-    out = np.zeros((N, 1))
+    out = np.zeros((N, c))
+
     out[p] = image[y, x]
     header = f'{PATTERN} {w} {h}'  
 

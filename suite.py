@@ -5,6 +5,7 @@ import re
 
 def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
     _state_path = entry['_status']
+    _kill_path = entry['_kill']
 
     def savestate(path, name, folder, cidx, fidx, pidx, sidx, bidx):
         tmp = {
@@ -144,6 +145,16 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
         N = 0
         while sent_flag:
             savestate(_state_path, name, folder, *ptrs)
+
+            if pathlib.Path.exists(killpath):
+                # kill process
+                logprint(FILE_PTR, f'Found a kill file! {killpath}. Halting here. Good luck to the next run!')
+                if logging:
+                    FILE_PTR.flush()
+                    FILE_PTR.close()
+                pathlib.Path.unlink(killpath)
+                exit(0)
+            
             # logprint(FILE_PTR, 'Updated state file')
             command = COMMAND_RAW
             params = []
@@ -206,6 +217,7 @@ if len(sys.argv) <= 1:
 FORCE_ANSWER = ''
 SEQUENCE = 'BSPF'
 DO_WRITE = False
+KILL = False
 paths = []
 args = sys.argv[1:]
 idx = 0
@@ -213,6 +225,8 @@ while idx < len(args):
     arg = args[idx]
     if arg in ('-y', '-n', '--yes', '--no'):
         FORCE_ANSWER = 'y' if arg in ('-y', '--yes') else 'n'
+    elif arg in ('-k', '--kill'):
+        KILL = True
     elif arg in ('-l', '--log'):
         DO_WRITE = True
     elif arg in ('-s', '--sequence'):
@@ -240,6 +254,12 @@ def find_log_path(path:str):
     fname = f'.{fname}.log'
     return '/'.join(parts[:-1]) + '/' + fname
 
+def find_kill_path(path:str):
+    parts = re.split(r'[\\/]+', path)
+    fname = parts[-1]
+    fname = f'.{fname}.kill'
+    return '/'.join(parts[:-1]) + '/' + fname
+
 entries = []
 
 for path in paths:
@@ -259,10 +279,19 @@ for path in paths:
 
     entry['_status'] = find_state_path(path)
     entry['_log'] = find_log_path(path)
+    entry['_kill'] = find_kill_path(path)
     logpath = entry['_log']
     statuspath = entry['_status']
+    killpath = entry['_kill']
 
     if os.path.exists(statuspath) or os.path.exists(f'{statuspath}.bak'):
+        if KILL:
+            if not os.path.exists(killpath):
+                pathlib.Path.touch(killpath)
+            else:
+                print(f'No status path exists for suite path {path}. Will not attempt to kill.')
+            continue
+
         print(f'Found a file at status path {statuspath}: resume from this state for suite {path}? (Y/N)')
         usr = FORCE_ANSWER
         while usr not in ('y', 'n'):
