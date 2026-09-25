@@ -7,10 +7,11 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
     _state_path = entry['_status']
     _kill_path = entry['_kill']
 
-    def savestate(path, name, folder, cidx, fidx, pidx, sidx, bidx):
+    def savestate(path, name, folder, sequence, cidx, fidx, pidx, sidx, bidx):
         tmp = {
             'name' : name,
             'folder' : folder,
+            'sequence' : sequence,
             'pointers' : [cidx, fidx, pidx, sidx, bidx]
         }
 
@@ -144,7 +145,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
         sent_flag = True
         N = 0
         while sent_flag:
-            savestate(_state_path, name, folder, *ptrs)
+            savestate(_state_path, name, folder, sequence, *ptrs)
 
             if pathlib.Path.exists(killpath):
                 # kill process
