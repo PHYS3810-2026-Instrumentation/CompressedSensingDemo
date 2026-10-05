@@ -7,11 +7,12 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
     _state_path = entry['_status']
     _kill_path = entry['_kill']
 
-    def savestate(path, name, folder, sequence, cidx, fidx, pidx, sidx, bidx):
+    def savestate(path, name, folder, sequence, iter, cidx, fidx, pidx, sidx, bidx):
         tmp = {
             'name' : name,
             'folder' : folder,
             'sequence' : sequence,
+            'iteration' : iter,
             'pointers' : [cidx, fidx, pidx, sidx, bidx]
         }
 
@@ -72,6 +73,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
         FILE_PTR = open(file=logpath, mode='a')
 
     RESUME_FLAG = False
+    ITER_N = 0
     if os.path.exists(_state_path):
         with open(_state_path) as fp:
             state = json.load(fp)
@@ -85,6 +87,10 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
             prev_seq = state['sequence']
         else:
             prev_seq = sequence
+
+        if 'iteration' in state:
+            ITER_N = state['iteration']
+
         if prev_seq != sequence:
             logprint(FILE_PTR, f'Warning: current sequence {sequence} does not match previous sequence {prev_seq}! Continuing anyway. I trust your judgement.')
         RESUME_FLAG = True
@@ -106,7 +112,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
 
     MAXES = [len(commands), len(files), len(patterns), len(samples), len(bases)]
 
-    logprint(FILE_PTR, f'Maxes (SEQ={sequence}): {','.join([str(e) for e in MAXES])} ({np.sum(MAXES).astype(int)} combinations)')
+    logprint(FILE_PTR, f'Maxes (SEQ={sequence}): {','.join([str(e) for e in MAXES])} ({np.prod(MAXES).astype(int)} combinations)')
 
     MONO_REPLACE = {
         '[FOLDER]' : folder,
@@ -127,6 +133,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
 
     # get the command parts, join it, then identify variables and flag them.
     import cspy
+
     while ptrs[CIDX] < MAXES[CIDX]:
         COMMAND_RAW = ', '.join(commands[ptrs[CIDX]])
         logprint(FILE_PTR, f'Starting command\t{COMMAND_RAW}')
@@ -141,17 +148,19 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
         for dyn in DYNAMIC_REPLACE:
             if dyn in COMMAND_RAW:
                 k = DYNAMIC_REPLACE[dyn][1]
+                if not DYNAMIC_FLAGS[k]:
+                    perms *= MAXES[k]
                 DYNAMIC_FLAGS[k] = True
-                perms *= MAXES[k]
                 if MAXES[k] == 0:
                     logprint(FILE_PTR, f'Error - Calling upon {dyn} in command {COMMAND_RAW}, but {dyn} has no entries!')
                     exit(-4)
-        logprint(FILE_PTR, f'Command should have {perms} permutations')
+        logprint(FILE_PTR, f'Command should have {perms} permutation(s)')
 
         sent_flag = True
-        N = 0
+        N = ITER_N
+        ITER_N = 0
         while sent_flag:
-            savestate(_state_path, name, folder, sequence, *ptrs)
+            savestate(_state_path, name, folder, sequence, N, *ptrs)
 
             if pathlib.Path.exists(killpath):
                 # kill process
