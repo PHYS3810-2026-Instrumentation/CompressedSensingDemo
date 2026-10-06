@@ -1063,6 +1063,10 @@ arguments:
     -m, --mask (path)
         specifies the path to a sample mask from which the samples will be taken.
         sample mask should be an all-or-none vector of the same length as the input vector
+
+    -p, --part (fraction)
+        specifies which part to take a sample of. This section of the sample P array is used.
+        For example, specifying 0/4 will take the first quarter of the sample P array, where 3/4 will take the final quarter of the sample P array.
     
     -ns, --no-save
         Disables saving of output to disk.
@@ -1074,6 +1078,7 @@ arguments:
     MASK_PATH = None
     IS_IMAGE_SAMPLE = False
     NO_SAVE = False
+    PARTS = None
 
     idx = 0
     while idx < len(args):
@@ -1086,6 +1091,9 @@ arguments:
             MASK_PATH = args[idx]
         elif arg in ('-ns', '--no-save'):
             NO_SAVE = True
+        elif arg in ('-p', '--part'):
+            idx += 1
+            PARTS = args[idx]
         else:
             if arg.endswith("%"):
                 PERCENT = float(arg[:-1]) / 100.
@@ -1164,6 +1172,24 @@ arguments:
             print(f'No percentage given!')
             return ltret(-2, pipe)
         P = take_samples(N, int(PERCENT * N))
+
+    if PARTS != None:
+        # verify PARTS is valid
+        import re
+        tmp = re.split(r'[\\/]', PARTS)
+        if len(tmp) != 2:
+            print(f'Parts parameter invalid: {PARTS} should be in form int/int.')
+            return ltret(-500, pipe)
+        sect = int(tmp[0])
+        max_sect = int(tmp[1])
+        if max_sect < 1:
+            max_sect = 1
+        fraction = 1.0 / max_sect
+        fullsize = len(P)
+        step = int(fraction * fullsize)
+        low_range = (step * sect)
+        high_range = (step * (sect+1)) if sect < (max_sect-1) else fullsize
+        P = P[low_range:high_range]
 
     if IS_IMAGE_SAMPLE:
         sample_mask = np.zeros((N, 3))
