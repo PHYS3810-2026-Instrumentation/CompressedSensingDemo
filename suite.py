@@ -7,12 +7,13 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
     _state_path = entry['_status']
     _kill_path = entry['_kill']
 
-    def savestate(path, name, folder, sequence, iter, cidx, fidx, pidx, sidx, bidx):
+    def savestate(path, name, folder, sequence, iter, vars, cidx, fidx, pidx, sidx, bidx):
         tmp = {
             'name' : name,
             'folder' : folder,
             'sequence' : sequence,
             'iteration' : iter,
+            'vars' : vars,
             'pointers' : [cidx, fidx, pidx, sidx, bidx]
         }
 
@@ -74,6 +75,7 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
 
     RESUME_FLAG = False
     ITER_N = 0
+    VAR_VALS = {}
     if os.path.exists(_state_path):
         with open(_state_path) as fp:
             state = json.load(fp)
@@ -87,6 +89,9 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
             prev_seq = state['sequence']
         else:
             prev_seq = sequence
+
+        if 'vars' in state:
+            VAR_VALS = state['vars']
 
         if 'iteration' in state:
             ITER_N = state['iteration']
@@ -145,8 +150,13 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
 
         DYNAMIC_FLAGS = [False] * 5
         perms = 1
-        for dyn in DYNAMIC_REPLACE:
-            if dyn in COMMAND_RAW:
+        pattern = r'\[[\w|\d|\=]*\]'
+        dynamics = re.findall(pattern, COMMAND_RAW)
+        MUTABLE_DYNAMICS = { }
+        MUTABLE_VALUES = { }
+        MUTABLE_ORDER = []
+        for dyn in dynamics:
+            if dyn in DYNAMIC_REPLACE:
                 k = DYNAMIC_REPLACE[dyn][1]
                 if not DYNAMIC_FLAGS[k]:
                     perms *= MAXES[k]
@@ -154,21 +164,53 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
                 if MAXES[k] == 0:
                     logprint(FILE_PTR, f'Error - Calling upon {dyn} in command {COMMAND_RAW}, but {dyn} has no entries!')
                     exit(-4)
+            elif dyn in MONO_REPLACE:
+                # should never hit
+                pass
+            else:
+                rawdyn = dyn
+                # strip off the leading and trailing brackets
+                dyn = dyn[1:-1]
+                parts = dyn.split('=')
+                varname = parts[0]
+                assignment = -1
+                if len(parts) > 1:
+                    assignment = int(parts[1])
+                    COMMAND_RAW = COMMAND_RAW.replace(rawdyn, f'[{varname}]')
+                if varname in MUTABLE_DYNAMICS:
+                    if MUTABLE_DYNAMICS[varname] == -1 and assignment > 0:
+                        MUTABLE_DYNAMICS[varname] = assignment
+                        perms *= assignment
+                else:
+                    MUTABLE_DYNAMICS[varname] = assignment
+                    if assignment is not None:
+                        perms *= assignment
+                    MUTABLE_ORDER.append(varname)
+
+        for varname in MUTABLE_DYNAMICS:
+            MUTABLE_VALUES[varname] = 0
+            if MUTABLE_DYNAMICS[varname] < 0:
+                logprint(FILE_PTR, f'Invalid value range for suite variable {varname} = {MUTABLE_DYNAMICS[varname]}. Possibly not defined.')
+                MUTABLE_DYNAMICS[varname] = 0
+            if varname in VAR_VALS:
+                MUTABLE_VALUES[varname] = VAR_VALS[varname]
+
+        VAR_VALS = { }
         logprint(FILE_PTR, f'Command should have {perms} permutation(s)')
 
         sent_flag = True
         N = ITER_N
         ITER_N = 0
         while sent_flag:
-            savestate(_state_path, name, folder, sequence, N, *ptrs)
+            savestate(_state_path, name, folder, sequence, N, MUTABLE_VALUES, *ptrs)
 
-            if pathlib.Path.exists(killpath):
+            if pathlib.Path.exists(_kill_path):
                 # kill process
-                logprint(FILE_PTR, f'Found a kill file! {killpath}. Halting here. Good luck to the next run!')
+                logprint(FILE_PTR, f'Found a kill file! {_kill_path}. Halting here. Good luck to the next run!')
                 if logging:
                     FILE_PTR.flush()
                     FILE_PTR.close()
-                pathlib.Path.unlink(killpath)
+                pathlib.Path.unlink(_kill_path)
                 exit(0)
             
             # logprint(FILE_PTR, 'Updated state file')
@@ -182,6 +224,13 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
                     command = command.replace(dyn, tmp)
                     params.append(f'{dyn}:{tmp}')
 
+            for dyn in MUTABLE_VALUES:
+                replstr = f'[{dyn}]'
+                if f'[{dyn}]' in command:
+                    tmp = str(MUTABLE_VALUES[dyn])
+                    command = command.replace(replstr, tmp)
+                    params.append(f'{replstr}:{tmp}')
+
             # issue command
             params = ', '.join(params)
             logprint(FILE_PTR, f'{N}/{perms}\t{params}')
@@ -191,7 +240,22 @@ def operate_test(entry:dict, sequence:str='BSPF', logging:bool=False):
             logprint(FILE_PTR, f'Code {response}')
             N += 1
 
-            # tick up counters
+            # first tick up vars
+            submissive_anchor_inc = 0
+
+            while submissive_anchor_inc < len(MUTABLE_ORDER):
+                varname = MUTABLE_ORDER[submissive_anchor_inc]
+                MUTABLE_VALUES[varname] = MUTABLE_VALUES[varname] + 1
+                if MUTABLE_VALUES[varname] >= MUTABLE_DYNAMICS[varname]:
+                    MUTABLE_VALUES[varname] = 0
+                    submissive_anchor_inc += 1
+                else:
+                    break
+
+            if submissive_anchor_inc < len(MUTABLE_ORDER):
+                continue
+
+            # then tick up counters
             super_anchor_inc = 0
             while super_anchor_inc < len(inc_ptrs):
                 anchor_inc = inc_ptrs[super_anchor_inc]
