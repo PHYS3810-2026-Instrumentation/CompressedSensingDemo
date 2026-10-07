@@ -1068,6 +1068,9 @@ arguments:
         specifies which part to take a sample of. This section of the sample P array is used.
         For example, specifying 0/4 will take the first quarter of the sample P array, where 3/4 will take the final quarter of the sample P array.
     
+    -ms, --multisample
+        When defined in conjunction with --part, enables multi-sub-sampling of sample array P. This creates overlapping sub-sampled parts (i.e. with 4 parts, each part will be 50% of the full sample mask, overlapping with two others).
+    
     -ns, --no-save
         Disables saving of output to disk.
 ''')
@@ -1079,6 +1082,7 @@ arguments:
     IS_IMAGE_SAMPLE = False
     NO_SAVE = False
     PARTS = None
+    MULTISAMPLE = False
 
     idx = 0
     while idx < len(args):
@@ -1094,6 +1098,8 @@ arguments:
         elif arg in ('-p', '--part'):
             idx += 1
             PARTS = args[idx]
+        elif arg in ('-ms', '--multisample'):
+            MULTISAMPLE = True
         else:
             if arg.endswith("%"):
                 PERCENT = float(arg[:-1]) / 100.
@@ -1188,8 +1194,22 @@ arguments:
         fullsize = len(P)
         step = int(fraction * fullsize)
         low_range = (step * sect)
-        high_range = (step * (sect+1)) if sect < (max_sect-1) else fullsize
-        P = P[low_range:high_range]
+        if not MULTISAMPLE:
+            high_range = (step * (sect+1)) if sect < (max_sect-1) else fullsize
+            P = P[low_range:high_range]
+        else:
+            if sect < (max_sect - 2):
+                P = P[low_range:step * (sect + 2)]
+            elif sect == (max_sect - 2):
+                P = P[low_range:fullsize]
+            else:
+                P =  P[low_range:fullsize] + P[0:step]
+
+
+
+                
+                
+
 
     if IS_IMAGE_SAMPLE:
         sample_mask = np.zeros((N, 3))
