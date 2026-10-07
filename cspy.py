@@ -1178,6 +1178,7 @@ arguments:
             print(f'No percentage given!')
             return ltret(-2, pipe)
         P = take_samples(N, int(PERCENT * N))
+    P = np.array(P)
 
     if PARTS != None:
         # verify PARTS is valid
@@ -1203,13 +1204,7 @@ arguments:
             elif sect == (max_sect - 2):
                 P = P[low_range:fullsize]
             else:
-                P =  P[low_range:fullsize] + P[0:step]
-
-
-
-                
-                
-
+                P = np.concatenate((P[low_range:fullsize], P[0:step]))
 
     if IS_IMAGE_SAMPLE:
         sample_mask = np.zeros((N, 3))
