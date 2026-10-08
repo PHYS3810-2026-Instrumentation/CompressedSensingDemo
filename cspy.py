@@ -1586,6 +1586,9 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
 
         -na, --no-alpha
             Strips out the alpha channel before saving if an alpha channel is present. Off by default.
+            
+        -i, --invert
+            Inverts the colors of the image.
     ''')
         return ltret(0, pipe)
     
@@ -1597,6 +1600,7 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
     NO_SAVE = False
     NO_ALPHA = False
     MONO = False
+    INVERT = False
 
     idx = 0
     while idx < len(args):
@@ -1627,6 +1631,8 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
                 DO_RESIZE = (v, None)
             else:
                 DO_RESIZE = (None, v)
+        elif arg in ('-i', '--invert'):
+            INVERT = True
         elif arg in ('-c', '--crop'):
             DO_CROP = True
         else:
@@ -1696,6 +1702,13 @@ def prepare(args, pipe:bool = False, inp:any = None, file_precache:dict = None):
 
     if image.dtype == np.float32:
         image = np.clip(image, 0, 1)
+        
+    if INVERT:
+        if image.dtype in (np.float32, np.float64):
+            image = 1 - image
+        else:
+            image = 255 - image
+            image = image.astype(np.uint8)
 
     if not NO_SAVE:
         image_saver(image, OUT_PATH, MONO)
