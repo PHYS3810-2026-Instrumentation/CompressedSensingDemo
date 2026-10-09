@@ -697,7 +697,7 @@ def image_saver(image, path, MONO:bool = False):
 Path-etch functions. Produces grid and squid.
 '''
 
-def theta_path(w, h, densities=None):
+def theta_path(w, h, densities=None, invert=False):
     '''
     Densities can contain three attributes for the Radius coefficient, R density, and Theta density. defaults to sqrt(2) for each
     '''
@@ -720,6 +720,7 @@ def theta_path(w, h, densities=None):
 
 
     squid = np.zeros((N, 2))
+    flip = False
     n = 0
     for r, dn in zip(R, Theta_steps):
         if r == 0 or dn == 0:
@@ -732,6 +733,11 @@ def theta_path(w, h, densities=None):
         x, y = np.round(mid_w + (np.cos(thetas) * r)), np.round(mid_h + (np.sin(thetas) * r))
         x = x.astype(int)
         y = y.astype(int)
+
+        if flip:
+            x, y = np.flip(x), np.flip(y)
+        if invert:
+            flip = not flip
         n_space = np.arange(n, n+dn, dtype=int)
 
         p = np.array([x, y])
@@ -814,7 +820,7 @@ def xy_path(w, h):
 def theta_min_special_devector(signal, W, H):
     grid, squid = theta_path(W, H)
     squid, signal_res, p = squid_restrict_data(squid, signal, W, H)
-    Y, X = squid[:,0], squid[:, 1]
+    X, Y = squid[:,0], squid[:, 1]
 
     # apply theta sensitive mean
     blank = np.zeros((W, H))
@@ -830,6 +836,8 @@ def theta_min_special_devector(signal, W, H):
 
     return blank
 
+def theta_inv_min(w, h):
+    return theta_path(w, h, invert=True)
     
 
 PATH_FUNCS = {
@@ -837,7 +845,8 @@ PATH_FUNCS = {
     'snake_square' : snake_square_path,
     'snake_square_inv' : snake_inv_square_path,
     'xy' : xy_path,
-    'theta_min' : theta_path # has a special resolve case!
+    'theta_min' : theta_path, # has a special resolve case!
+    'theta_min_inv' : theta_inv_min # should be WORSE than theta min!
 }
 
 PATH_FUNCS_SPECIAL_VECTOR = { }
