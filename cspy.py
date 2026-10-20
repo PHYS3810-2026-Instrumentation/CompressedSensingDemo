@@ -817,8 +817,55 @@ def xy_path(w, h):
 
     return grid, squid
 
+def xy_inv_path(w, h):
+    N = w * h
+    series = np.arange(N)
+    grid = np.reshape(series, (w, h))
+    grid[::2,:] = np.flip(grid[::2,:],axis=1)
+    x = np.ravel(np.argsort(grid))
+    y = np.ravel(np.transpose(np.argsort(np.transpose(grid))))
+    squid = np.array([x, y])
+    if squid.shape[0] == 2:
+        squid = np.transpose(squid)
+
+    return grid, squid
+
+def theta_one_path(w, h, radius=np.sqrt(2), invert=False):
+    _, squid = theta_path(w, h, densities=(radius, 3, 3), invert=invert)
+    squid, _ = squid_restrict(squid, w, h)
+    N_act = w * h
+    u, indices = np.unique(squid, axis=0, return_index=True)
+    squid = squid[np.sort(indices)]
+    grid = np.zeros((w, h))
+    x, y = squid[:,0], squid[:,1]
+    grid[y, x] = np.arange(N_act)
+
+    return grid, squid
+
+def theta_one_inv_path(w, h, radius=np.sqrt(2)):
+    return theta_one_path(w, h, radius, True)
+
 def theta_min_special_devector(signal, W, H):
     grid, squid = theta_path(W, H)
+    squid, signal_res, p = squid_restrict_data(squid, signal, W, H)
+    X, Y = squid[:,0], squid[:, 1]
+
+    # apply theta sensitive mean
+    blank = np.zeros((W, H))
+    count_correction = np.zeros((W, H))
+    np.add.at(blank, (Y, X), signal_res)
+    np.add.at(count_correction, (Y, X), 1)
+    count_correction = np.where(count_correction == 0, 1, count_correction)
+    inverse_count_correction = np.pow(count_correction, -1)
+    blank = blank * inverse_count_correction
+
+    # apply theta sensitive L1 minimum
+    np.minimum.at(blank, (Y, X), signal_res)
+
+    return blank
+
+def theta_min_inv_special_devector(signal, W, H):
+    grid, squid = theta_path(W, H, invert=True)
     squid, signal_res, p = squid_restrict_data(squid, signal, W, H)
     X, Y = squid[:,0], squid[:, 1]
 
@@ -846,13 +893,17 @@ PATH_FUNCS = {
     'snake_square_inv' : snake_inv_square_path,
     'xy' : xy_path,
     'theta_min' : theta_path, # has a special resolve case!
-    'theta_min_inv' : theta_inv_min # should be WORSE than theta min!
+    'theta_min_inv' : theta_inv_min, # should be WORSE than theta min!
+    'xy_inv' : xy_inv_path,
+    'theta_one' : theta_one_path,
+    'theta_one_inv' : theta_one_inv_path,
 }
 
 PATH_FUNCS_SPECIAL_VECTOR = { }
 
 PATH_FUNCS_SPECIAL_DEVECTOR = {
-    'theta_min' : theta_min_special_devector
+    'theta_min' : theta_min_special_devector,
+    'theta_min_inv' : theta_min_inv_special_devector
 }
 
 '''
@@ -1475,7 +1526,7 @@ def devector(args, pipe:bool = False, inp:any = None, file_precache:dict = None)
         else:
             squid_res, dat_res, p = squid_restrict_data(squid, data, w, h)
             x, y = squid_res[:,0], squid_res[:,1]
-            image[y, x, 0] = dat_res
+            image[y, x, 0:c] = dat_res
 
     if len(image.shape) == 3 and image.shape[2] == 1:
         image = image[:,:,0]
